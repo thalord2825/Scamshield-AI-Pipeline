@@ -1,0 +1,44 @@
+# ==============================================================================
+# Git Ignore Configuration for ScamShield-AI-Pipeline
+# ==============================================================================
+
+# API Keys & Secrets
+.env
+*.env
+secrets.json
+api_key.txt
+
+# Python Bytecode & Cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual Environments
+.venv/
+venv/
+ENV/
+env/
+
+# Build & Distribution
+build/
+dist/
+*.egg-info/
+wheels/
+
+# IDE & Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS Temporary Files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Pytest & Coverage
+.pytest_cache/
+.coverage
+htmlcov/

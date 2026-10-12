@@ -1,0 +1,24 @@
+version: "3.8"
+
+services:
+  scamshield-ai-engine:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: scamshield-ai-engine
+    ports:
+      - "8000:8000"
+    environment:
+      - PORT=8000
+      - HOST=0.0.0.0
+      - TIER1_CONFIDENCE_THRESHOLD=0.90
+      - USE_COUNCIL=true
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+    env_file:
+      - .env
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3

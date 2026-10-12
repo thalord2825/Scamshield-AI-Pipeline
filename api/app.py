@@ -1,0 +1,255 @@
+"""
+==============================================================================
+ScamShield-VN: AI Pipeline Microservice (FastAPI REST Service)
+==============================================================================
+Provides decoupled RESTful AI inference endpoints for:
+- Spring Boot Backend Service (REST Client)
+- Mobile App & Web Frontend (Direct / Dev testing)
+- Automated Microservice Health & Monitoring
+==============================================================================
+"""
+
+import os
+import sys
+import time
+import uuid
+import logging
+from datetime import datetime, timezone
+from typing import Dict, Any, List
+
+from fastapi import FastAPI, HTTPException, status
+from fastapi.middleware.cors import CORSMiddleware
+from dotenv import load_dotenv
+
+# Ensure root directory is on PYTHONPATH
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if ROOT_DIR not in sys.path:
+    sys.path.insert(0, ROOT_DIR)
+
+load_dotenv(os.path.join(ROOT_DIR, ".env"))
+
+from pipeline.two_tier_router import TwoTierRouter
+from api.schemas import (
+    ScanRequest,
+    StandardScanResponse,
+    ScanResultData,
+    Verdict,
+    RadarMetrics,
+    CouncilBreakdown,
+    AgentFinding,
+    HealthResponse,
+)
+
+# Logging configuration
+logging.basicConfig(
+    level=logging.INFO,
+    format="[%(asctime)s] [%(levelname)s] [%(name)s]: %(message)s",
+    datefmt="%H:%M:%S",
+)
+logger = logging.getLogger("ScamShield.API")
+
+# FastAPI App setup
+app = FastAPI(
+    title="ScamShield-VN AI Pipeline Engine",
+    description="2-Tier Cascaded AI Inference Service (Tier-1 ViSoBERT Fast-Path + Tier-2 5-Agent Forensic Council)",
+    version="1.1.0",
+)
+
+# Cross-Origin Resource Sharing (CORS) for local frontend & Spring Boot
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Initialize router once on startup
+router_instance: TwoTierRouter = None
+
+
+@app.on_event("startup")
+def startup_event():
+    global router_instance
+    logger.info("Initializing ScamShield TwoTierRouter...")
+    try:
+        router_instance = TwoTierRouter(
+            confidence_threshold=float(os.getenv("TIER1_CONFIDENCE_THRESHOLD", "0.90")),
+            api_key=os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY"),
+            config_path=os.path.join(ROOT_DIR, "config", "gemini_models.yaml"),
+            council_config_path=os.path.join(ROOT_DIR, "config", "council_registry.yaml"),
+            use_council=os.getenv("USE_COUNCIL", "true").lower() == "true",
+        )
+        logger.info("ScamShield TwoTierRouter successfully initialized and ready for requests.")
+    except Exception as e:
+        logger.error(f"Failed to initialize TwoTierRouter: {e}", exc_info=True)
+
+
+@app.get("/health", response_model=HealthResponse)
+def health_check():
+    """Health check endpoint for Docker container & Kubernetes readiness probe."""
+    tier1_ready = router_instance is not None and router_instance.tier1_classifier is not None
+    tier2_ready = router_instance is not None and (router_instance.council is not None or router_instance.tier2_registry is not None)
+    return HealthResponse(
+        status="healthy" if (tier1_ready and tier2_ready) else "degraded",
+        version="1.1.0",
+        service="ScamShield AI Pipeline Engine",
+        tier1_ready=tier1_ready,
+        tier2_ready=tier2_ready,
+    )
+
+
+def _compute_radar_metrics(content: str, is_scam: bool, raw_res: Dict[str, Any]) -> RadarMetrics:
+    """Derives intuitive 0-100 radar scores based on extracted cues and council results."""
+    text_lower = content.lower()
+    
+    # Heuristic scoring
+    urgency = 85 if any(w in text_lower for w in ["ngay", "khẩn cấp", "24h", "hết hạn", "khóa", "tạm khóa", "gấp"]) else 15
+    authority = 95 if any(w in text_lower for w in ["công an", "viện kiểm sát", "tòa án", "bộ công an", "vietcombank", "thuế"]) else 10
+    financial = 90 if any(w in text_lower for w in ["tiền", "chuyển khoản", "nạp", "otp", "vay", "tri ân", "trúng thưởng", "lương"]) else 15
+    channel = 85 if any(w in text_lower for w in ["zalo", "telegram", "link", "http", ".xyz", ".top", ".cc"]) else 20
+    data_harvest = 90 if any(w in text_lower for w in ["cccd", "mật khẩu", "đăng nhập", "otp", "sinh trắc", "cập nhật"]) else 10
+
+    if not is_scam:
+        # Scale down for HAM messages
+        urgency = min(urgency, 30)
+        authority = min(authority, 30)
+        financial = min(financial, 25)
+        channel = min(channel, 20)
+        data_harvest = min(data_harvest, 15)
+
+    return RadarMetrics(
+        urgency=urgency,
+        authority_impersonation=authority,
+        financial_lure=financial,
+        suspicious_channel=channel,
+        data_harvesting=data_harvest,
+    )
+
+
+def _build_recommendations(is_scam: bool, risk_level: str) -> List[str]:
+    """Provides actionable advice conforming to UI contract."""
+    if is_scam or risk_level in ["DANGEROUS", "HIGH", "CRITICAL"]:
+        return [
+            "Tuyệt đối không nhấp vào bất kỳ đường link nào trong tin nhắn.",
+            "Không cung cấp mật khẩu ngân hàng, mã OTP, số CCCD hoặc thông tin sinh trắc học.",
+            "Thông báo cho người thân, chặn số liên lạc và gửi báo cáo lừa đảo lên hệ thống.",
+        ]
+    elif risk_level in ["SUSPICIOUS", "MEDIUM"]:
+        return [
+            "Tin nhắn có dấu hiệu bất thường, cần kiểm tra lại qua kênh liên hệ chính thống.",
+            "Xác minh danh tính người gửi qua số điện thoại tổng đài chính thức của đơn vị liên quan.",
+        ]
+    return [
+        "Tin nhắn không có dấu hiệu lừa đảo nguy hiểm.",
+        "Tiếp tục cảnh giác với các yêu cầu chuyển tiền bất thường phát sinh sau này.",
+    ]
+
+
+@app.post("/api/v1/scan", response_model=StandardScanResponse)
+def scan_message(req: ScanRequest):
+    """
+    Main Scan Endpoint conforming to ScamShield Contract (docs/04_API_CONTRACTS_AND_SCHEMAS.md).
+    Processes message through Tier-1 Fast-Path, escalating to Tier-2 Council only when needed.
+    """
+    if not router_instance:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="AI Pipeline Engine is still initializing. Please retry shortly.",
+        )
+
+    try:
+        raw_res = router_instance.classify(req.content, force_tier2=req.force_tier2)
+    except Exception as e:
+        logger.error(f"Inference error during scan: {e}", exc_info=True)
+        return StandardScanResponse(
+            status="error",
+            error=f"Model inference failed: {str(e)}",
+        )
+
+    is_scam = raw_res.get("is_scam", False)
+    confidence = float(raw_res.get("final_confidence", 0.0))
+    tier_executed = 2 if raw_res.get("escalated", False) else 1
+
+    # Map risk level
+    raw_risk = raw_res.get("risk_level", "LOW").upper()
+    if is_scam:
+        risk_level = "DANGEROUS" if raw_risk in ["CRITICAL", "HIGH", "DANGEROUS"] else "SUSPICIOUS"
+        risk_score = round(confidence * 100.0, 1)
+        if risk_score < 70.0 and risk_level == "DANGEROUS":
+            risk_score = 88.5
+    else:
+        risk_level = "SAFE"
+        risk_score = round((1.0 - confidence) * 15.0, 1)
+
+    # Format Council Breakdown if Tier 2 executed
+    council_breakdown = None
+    if tier_executed == 2 and "tier2_telemetry" in raw_res:
+        t2_telemetry = raw_res["tier2_telemetry"]
+        specialist_votes = t2_telemetry.get("specialist_votes", [])
+        agents_list = []
+        for v in specialist_votes:
+            agents_list.append(
+                AgentFinding(
+                    role=v.get("display_name", v.get("role_id", "Specialist")),
+                    verdict="DANGEROUS" if v.get("vote") == "SCAM" else "SAFE",
+                    score=round(v.get("scam_probability", 0.0) * 100.0, 1),
+                    finding=v.get("rationale", "Phân tích chuyên sâu từ Hội đồng"),
+                )
+            )
+
+        scam_count = sum(1 for v in specialist_votes if v.get("vote") == "SCAM")
+        total_votes = len(specialist_votes) if specialist_votes else 5
+        council_breakdown = CouncilBreakdown(
+            consensus_ratio=f"{scam_count}/{total_votes}",
+            lead_model=raw_res.get("model_name", "ForensicCouncil-v1.1"),
+            early_exit=t2_telemetry.get("early_exit", False),
+            defender_intervened=t2_telemetry.get("defender_intervened", False),
+            agents=agents_list,
+        )
+
+    scan_id = f"SC-{datetime.now(timezone.utc).strftime('%Y%m%d')}-{uuid.uuid4().hex[:6].upper()}"
+    timestamp = datetime.now(timezone.utc).isoformat()
+
+    verdict = Verdict(
+        risk_level=risk_level,
+        risk_score=risk_score,
+        scam_category=raw_res.get("scam_type", "Chưa phân loại"),
+        confidence=round(confidence, 4),
+        summary=raw_res.get("explanation", "Kết quả phân tích từ AI Engine"),
+    )
+
+    radar = _compute_radar_metrics(req.content, is_scam, raw_res)
+    recommendations = _build_recommendations(is_scam, risk_level)
+
+    result_data = ScanResultData(
+        scan_id=scan_id,
+        timestamp=timestamp,
+        tier_executed=tier_executed,
+        verdict=verdict,
+        radar_metrics=radar,
+        council_breakdown=council_breakdown,
+        actionable_recommendations=recommendations,
+        telemetry={
+            "routing_path": raw_res.get("routing_path"),
+            "routing_reason": raw_res.get("routing_reason"),
+            "total_latency_ms": raw_res.get("total_latency_ms"),
+            "total_cost_usd": raw_res.get("total_cost_usd"),
+            "tier1": raw_res.get("tier1_telemetry"),
+        },
+    )
+
+    return StandardScanResponse(status="success", data=result_data)
+
+
+@app.post("/api/v1/scan/raw")
+def scan_message_raw(req: ScanRequest):
+    """Debug endpoint returning exact internal router output dictionary."""
+    if not router_instance:
+        raise HTTPException(status_code=503, detail="AI Engine not initialized")
+    return router_instance.classify(req.content, force_tier2=req.force_tier2)
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("api.app.py:app", host="0.0.0.0", port=8000, reload=True)
