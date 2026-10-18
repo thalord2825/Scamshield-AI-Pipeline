@@ -42,3 +42,6 @@ desktop.ini
 .pytest_cache/
 .coverage
 htmlcov/
+
+# Temporary downloaded datasets
+data/raw/vietnamese_sms_full.csv

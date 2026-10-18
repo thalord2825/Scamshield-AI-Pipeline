@@ -74,8 +74,9 @@ def main():
     max_abs_diff = float(np.max(np.abs(reference - actual)))
     if max_abs_diff > 1e-3:
         raise RuntimeError(f"ONNX/PyTorch logits differ by {max_abs_diff:.6g}; expected <= 0.001")
+    rel_onnx_path = str(output.relative_to(ROOT)).replace("\\", "/") if output.is_relative_to(ROOT) else str(output)
     summary = {
-        "onnx_path": str(output),
+        "onnx_path": rel_onnx_path,
         "size_bytes": output.stat().st_size,
         "opset": 17,
         "providers_tested": session.get_providers(),

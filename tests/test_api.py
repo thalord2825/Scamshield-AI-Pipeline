@@ -1,8 +1,14 @@
-"""
-Unit & Integration Tests for ScamShield AI Pipeline Microservice
-"""
+import sys
+from pathlib import Path
 
-import pytest
+ROOT_DIR = str(Path(__file__).resolve().parents[1])
+if ROOT_DIR not in sys.path:
+    sys.path.insert(0, ROOT_DIR)
+
+try:
+    import pytest
+except ImportError:
+    pytest = None
 from fastapi.testclient import TestClient
 from api.app import app, startup_event
 
@@ -46,3 +52,23 @@ def test_scan_tier1_fastpath_ham():
     data = res["data"]
     assert data["verdict"]["risk_level"] == "SAFE"
     assert data["tier_executed"] == 1
+
+
+def test_visobert_direct_endpoint():
+    payload = {
+        "message": "Tai khoan cua quy khach bi khoa. Truy cap https://vcb-verify.xyz de xac thuc ngay."
+    }
+    response = client.post("/api/v1/visobert/predict", json=payload)
+    assert response.status_code == 200
+    data = response.json()
+    assert data["decision"] in ["SCAM", "REVIEW"]
+    assert "scam_probability" in data
+    assert "latency_ms" in data
+
+
+if __name__ == "__main__":
+    test_health_check()
+    test_scan_tier1_fastpath_scam()
+    test_scan_tier1_fastpath_ham()
+    test_visobert_direct_endpoint()
+    print("All tests passed successfully!")
