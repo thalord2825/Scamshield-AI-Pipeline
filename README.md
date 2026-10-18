@@ -183,35 +183,100 @@ docker compose logs -f
 {
   "status": "success",
   "data": {
-    "scan_id": "SC-20261012-A8F12B",
-    "timestamp": "2026-10-12T15:15:20.123456Z",
+    "scan_id": "SC-20261018-140FCE",
+    "timestamp": "2026-10-18T14:17:23.126590+00:00",
     "tier_executed": 1,
     "verdict": {
       "risk_level": "DANGEROUS",
-      "risk_score": 100.0,
-      "scam_category": "Detected by Tier 1 Heuristic/Pattern",
-      "confidence": 0.9997,
-      "summary": "Xử lý trực tiếp bởi Tier 1 (PhoBERT Local Fast-Path) với độ tự tin 100.0% >= 90%."
+      "risk_score": 99.6,
+      "scam_category": "ViSoBERT text classifier",
+      "confidence": 0.996,
+      "summary": "ViSoBERT classified this message as SCAM with calibrated scam probability 0.9960."
     },
     "radar_metrics": {
-      "urgency": 85,
+      "urgency": 15,
       "authority_impersonation": 95,
-      "financial_lure": 90,
+      "financial_lure": 15,
       "suspicious_channel": 85,
-      "data_harvesting": 90
+      "data_harvesting": 10
     },
+    "council_breakdown": null,
     "actionable_recommendations": [
       "Tuyệt đối không nhấp vào bất kỳ đường link nào trong tin nhắn.",
       "Không cung cấp mật khẩu ngân hàng, mã OTP, số CCCD hoặc thông tin sinh trắc học.",
       "Thông báo cho người thân, chặn số liên lạc và gửi báo cáo lừa đảo lên hệ thống."
-    ]
-  }
+    ],
+    "telemetry": {
+      "routing_path": "TIER_1_DIRECT_FASTPATH",
+      "routing_reason": "ViSoBERT P(SCAM)=0.9960 falls outside REVIEW band [0.35, 0.85].",
+      "total_latency_ms": 651.79,
+      "total_cost_usd": 0,
+      "tier1": {
+        "label": "SCAM",
+        "class_id": 1,
+        "confidence": 0.9960368275642395,
+        "scam_prob": 0.9960368275642395,
+        "threshold_low": 0.35,
+        "threshold_high": 0.85,
+        "ham_prob": 0.004,
+        "latency_ms": 651.26,
+        "cost_usd": 0,
+        "is_sure": true,
+        "status": "CONFIDENT",
+        "matched_cues": [],
+        "reason": "ViSoBERT P(SCAM)=0.9960; REVIEW band=[0.35, 0.85]."
+      },
+      "final_label": "SCAM"
+    }
+  },
+  "error": null
 }
 ```
 
 ---
 
 ## 🧪 Chạy Demo & Kiểm thử
+
+### Fine-tune ViSoBERT Tier 1
+
+The training input is `data/raw/vietnamese_sms_merged_all.csv` (`message,label`;
+optional `message_id,source`). The held-out file is
+`data/raw/vietnamese_sms_test.csv` (`message,label`). Labels are `0=HAM` and
+`1=SCAM`. The supplied test set shares messages with the training CSV;
+`scripts/train_visobert.py` removes all test messages from the training pool
+before creating a stratified validation split. It stops on conflicting labels.
+
+```powershell
+.venv/Scripts/python.exe -m pip install -r requirements-training.txt
+.venv/Scripts/python.exe scripts/train_visobert.py
+```
+
+The script downloads the official `uitnlp/visobert` checkpoint on first run,
+using its pinned `model.safetensors` revision. On Windows with a compatible
+NVIDIA driver, install a CUDA PyTorch wheel from the official PyTorch index
+before running training; the default pip wheel may be CPU only.
+The supplied test file has 597 rows but 566 unique messages, so the reported
+test sample count is 566.
+The script
+fine-tunes a two-class head with scam class weight 5, selects the checkpoint
+with best validation macro-F1, calibrates temperature on validation logits,
+and evaluates once on the held-out test data. Model and tokenizer files plus
+`training_report.json` are saved in `models/visobert_finetuned/`. Use
+`--epochs`, `--batch-size`, `--max-length`, and `--output-dir` to adjust the run.
+The `.safetensors` checkpoint follows this repository's Git LFS rule.
+
+### Export the trained classifier to ONNX
+
+```powershell
+.venv/Scripts/python.exe -m pip install -r requirements-export.txt
+.venv/Scripts/python.exe scripts/export_visobert_onnx.py
+```
+
+This writes `models/visobert_finetuned/visobert_classifier.onnx` and
+`onnx_export_report.json`. The exporter checks the ONNX graph and compares
+ONNX Runtime CPU logits with PyTorch on sample messages. Calibration and
+decision thresholds remain in `training_report.json`. The scan API currently
+uses the PyTorch checkpoint; exporting does not change its runtime.
 
 - **Chạy console demo kiểm tra 10 benchmark test cases:**
   ```bash

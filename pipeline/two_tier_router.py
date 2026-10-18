@@ -15,9 +15,10 @@ Description:
 import time
 import json
 import logging
+import os
 from typing import Dict, List, Optional, Any
 from .model_registry import ModelRegistry
-from .local_classifier import LocalPhoBERTClassifier
+from api.visobert_app import PredictRequest, predict as predict_visobert, load_model
 from .forensic_council import ForensicCouncil
 
 logger = logging.getLogger("ScamShield.TwoTierRouter")
@@ -27,6 +28,24 @@ if not logger.handlers:
     handler.setFormatter(formatter)
     logger.addHandler(handler)
     logger.setLevel(logging.INFO)
+
+
+class TrainedViSoBERTClassifier:
+    """Adapt the saved ViSoBERT inference result to the router contract."""
+
+    def predict(self, message: str) -> Dict[str, Any]:
+        result = predict_visobert(PredictRequest(message=message))
+        return {
+            "label": result.decision,
+            "class_id": 1 if result.model_label == "SCAM" else 0,
+            "confidence": result.confidence,
+            "calibrated_scam_prob": result.scam_probability,
+            "latency_ms": result.latency_ms,
+            "matched_cues": [],
+            "temperature": result.temperature,
+            "threshold_low": result.threshold_low,
+            "threshold_high": result.threshold_high,
+        }
 
 
 SYSTEM_PROMPT_TIER_2 = """Bạn là chuyên gia an ninh mạng ScamShield-VN chuyên phân tích và phát hiện tin nhắn lừa đảo tiếng Việt (SMS, Zalo, Telegram, Facebook).
@@ -72,16 +91,17 @@ class TwoTierRouter:
         """
         self.tau = confidence_threshold
         self.use_council = use_council
-        self.tier1_classifier = LocalPhoBERTClassifier(
-            temperature=tier1_temperature,
-            cost_alpha=tier1_cost_alpha,
-        )
+        load_model()  # Fail startup if the trained checkpoint is unavailable.
+        self.tier1_classifier = TrainedViSoBERTClassifier()
+        def usable_key(value: Optional[str]) -> bool:
+            return bool(value and not value.lower().startswith("your_"))
         self.tier2_registry = ModelRegistry(
             api_key=api_key,
             config_path=config_path,
-            auto_discover=True,
+            auto_discover=usable_key(api_key),
         )
         self.council = ForensicCouncil(config_path=council_config_path) if use_council else None
+        self.tier2_available = usable_key(api_key) or usable_key(os.getenv("GROQ_API_KEY"))
         mode_str = "5-Agent Forensic Council" if use_council else "Single Cloud LLM"
         logger.info(f"TwoTierRouter Initialized. Fallback Threshold (tau) = {self.tau:.2f} | Tier-2 Mode: {mode_str}")
 
@@ -104,24 +124,24 @@ class TwoTierRouter:
         # -------------------------------------------------------------
         t1_result = self.tier1_classifier.predict(message)
         t1_confidence = t1_result["confidence"]
-        t1_is_sure = (t1_confidence >= self.tau)
+        t1_is_sure = t1_result["label"] != "REVIEW"
+        scam_prob = t1_result["calibrated_scam_prob"]
+        low, high = t1_result["threshold_low"], t1_result["threshold_high"]
 
         tier1_summary = {
             "label": t1_result["label"],
             "class_id": t1_result["class_id"],
             "confidence": t1_confidence,
             "scam_prob": t1_result["calibrated_scam_prob"],
+            "threshold_low": low,
+            "threshold_high": high,
             "ham_prob": round(1.0 - t1_result["calibrated_scam_prob"], 4),
             "latency_ms": t1_result["latency_ms"],
             "cost_usd": 0.0,
             "is_sure": t1_is_sure,
             "status": "CONFIDENT" if t1_is_sure else "UNSURE",
             "matched_cues": t1_result.get("matched_cues", []),
-            "reason": (
-                f"Độ tin cậy Tầng 1 ({t1_confidence*100:.1f}%) >= Ngưỡng an toàn ({self.tau*100:.0f}%) -> Rất tự tin."
-                if t1_is_sure
-                else f"Độ tin cậy Tầng 1 ({t1_confidence*100:.1f}%) < Ngưỡng an toàn ({self.tau*100:.0f}%) -> Vùng phân vân / không chắc chắn."
-            ),
+            "reason": f"ViSoBERT P(SCAM)={scam_prob:.4f}; REVIEW band=[{low:.2f}, {high:.2f}].",
         }
 
         # -------------------------------------------------------------
@@ -129,28 +149,25 @@ class TwoTierRouter:
         # -------------------------------------------------------------
         if t1_is_sure and not force_tier2:
             total_elapsed_ms = (time.perf_counter() - start_overall) * 1000
-            routing_reason = (
-                f"Độ tin cậy Tầng 1 đạt {t1_confidence*100:.1f}% >= {self.tau*100:.0f}% (Ngưỡng an toàn). "
-                f"Phản hồi trực tiếp tại thiết bị, KHÔNG cần gọi Cloud LLM (Tiết kiệm 100% chi phí và tối ưu độ trễ)."
-            )
+            routing_reason = f"ViSoBERT P(SCAM)={scam_prob:.4f} falls outside REVIEW band [{low:.2f}, {high:.2f}]."
             return {
                 "message": message,
                 "final_label": t1_result["label"],
                 "final_confidence": t1_confidence,
                 "is_scam": (t1_result["label"] == "SCAM"),
-                "scam_type": "Detected by Tier 1 Heuristic/Pattern" if t1_result["label"] == "SCAM" else "Legitimate Message",
+                "scam_type": "ViSoBERT text classifier" if t1_result["label"] == "SCAM" else "Legitimate Message",
                 "risk_level": "HIGH" if t1_result["label"] == "SCAM" else "LOW",
-                "explanation": f"Xử lý trực tiếp bởi Tier 1 (PhoBERT Local Fast-Path) với độ tự tin {t1_confidence*100:.1f}% >= {self.tau*100:.0f}%.",
+                "explanation": f"ViSoBERT classified this message as {t1_result['label']} with calibrated scam probability {t1_result['calibrated_scam_prob']:.4f}.",
                 "routing_path": "TIER_1_DIRECT_FASTPATH",
                 "routing_reason": routing_reason,
-                "tier_used": "Tier 1 (Local CPU PhoBERT)",
-                "model_name": "PhoBERT-base-v2-INT8",
+                "tier_used": "Tier 1 (Fine-tuned ViSoBERT)",
+                "model_name": "ScamShield-ViSoBERT",
                 "tier1_telemetry": tier1_summary,
                 "tier2_telemetry": {
                     "status": "SKIPPED",
                     "reason": "FastPath satisfied; no cloud escalation needed.",
                 },
-                "total_latency_ms": round(total_elapsed_ms + t1_result["latency_ms"], 2),
+                "total_latency_ms": round(total_elapsed_ms, 2),
                 "total_cost_usd": 0.0,
                 "escalated": False,
             }
@@ -159,14 +176,31 @@ class TwoTierRouter:
         # Case B: Escalate to Tier 2 (Dynamic Cloud Fallback)
         # Reason: Ambiguous case (Confidence < tau) or forced audit
         # -------------------------------------------------------------
-        fallback_trigger = "FORCED_AUDIT" if force_tier2 else f"LOW_CONFIDENCE ({t1_confidence*100:.1f}% < {self.tau*100:.0f}%)"
+        fallback_trigger = "FORCED_AUDIT" if force_tier2 else "VISOBERT_REVIEW_BAND"
+
+        if not self.tier2_available:
+            return {
+                "message": message,
+                "final_label": t1_result["label"],
+                "final_confidence": t1_confidence,
+                "is_scam": t1_result["label"] == "SCAM",
+                "scam_type": "ViSoBERT text classifier",
+                "risk_level": "MEDIUM" if t1_result["label"] == "REVIEW" else ("HIGH" if t1_result["label"] == "SCAM" else "LOW"),
+                "explanation": "ViSoBERT requires review; Tier 2 is unavailable." if t1_result["label"] == "REVIEW" else "ViSoBERT result; Tier 2 is unavailable.",
+                "routing_path": "TIER_1_REVIEW_TIER_2_UNAVAILABLE",
+                "routing_reason": "No usable Tier 2 provider key is configured.",
+                "tier_used": "Tier 1 (Fine-tuned ViSoBERT)",
+                "model_name": "ScamShield-ViSoBERT",
+                "tier1_telemetry": tier1_summary,
+                "tier2_telemetry": {"status": "UNAVAILABLE", "fallback_trigger": fallback_trigger},
+                "total_latency_ms": round((time.perf_counter() - start_overall) * 1000, 2),
+                "total_cost_usd": 0.0,
+                "escalated": False,
+            }
 
         # Check if Forensic Council is enabled
         if self.use_council and self.council:
-            routing_reason = (
-                f"Tầng 1 phân vân ({t1_confidence*100:.1f}% < {self.tau*100:.0f}%), rơi vào vùng rủi ro bỏ sót lừa đảo (FNR). "
-                f"Kích hoạt Tầng 2 (5-Agent Forensic Council) với cơ chế Early-Exit và phản biện chống Alarm Fatigue."
-            )
+            routing_reason = f"ViSoBERT P(SCAM)={scam_prob:.4f} is in REVIEW band; escalating to Tier 2 council."
             logger.info(f"Escalating message to Tier 2 Forensic Council. Reason: {fallback_trigger}")
             try:
                 council_res = self.council.evaluate_sync(message)
@@ -202,10 +236,7 @@ class TwoTierRouter:
             except Exception as e:
                 logger.error(f"Forensic Council execution failed: {e}. Falling back to single LLM registry.")
 
-        routing_reason = (
-            f"Tầng 1 phân vân ({t1_confidence*100:.1f}% < {self.tau*100:.0f}%), rơi vào vùng rủi ro bỏ sót lừa đảo (FNR). "
-            f"Kích hoạt Tầng 2 (Cloud LLM) để phân tích ngữ cảnh xã hội và bẫy thao túng tâm lý sâu."
-        )
+        routing_reason = f"ViSoBERT P(SCAM)={scam_prob:.4f} is in REVIEW band; escalating to Tier 2 cloud model."
         logger.info(f"Escalating message to Tier 2 Single Cloud LLM. Reason: {fallback_trigger}")
 
         t2_response = self.tier2_registry.generate_content(
@@ -278,12 +309,12 @@ class TwoTierRouter:
             "final_confidence": t1_confidence,
             "is_scam": (t1_result["label"] == "SCAM"),
             "scam_type": "Tier 1 Fallback (Tier 2 Offline)",
-            "risk_level": "MEDIUM" if t1_result["label"] == "SCAM" else "LOW",
+            "risk_level": "MEDIUM" if t1_result["label"] == "REVIEW" else ("HIGH" if t1_result["label"] == "SCAM" else "LOW"),
             "explanation": f"Tier 2 không khả dụng ({err_msg}). Hệ thống sử dụng kết quả dự đoán của Tier 1 ({t1_confidence*100:.1f}%).",
             "routing_path": "TIER_1_GRACEFUL_DEGRADATION",
-            "routing_reason": f"Tầng 1 phân vân ({t1_confidence*100:.1f}%), nhưng Tầng 2 Cloud tạm thời không khả dụng ({err_msg}) -> Duy trì hoạt động với kết quả Tầng 1.",
+            "routing_reason": f"Tier 2 unavailable ({err_msg}); preserving ViSoBERT decision {t1_result['label']}.",
             "tier_used": "Tier 1 (Graceful Degradation Mode)",
-            "model_name": "PhoBERT-base-v2-INT8",
+            "model_name": "ScamShield-ViSoBERT",
             "tier1_telemetry": tier1_summary,
             "tier2_telemetry": {
                 "status": "FAILED_OR_OFFLINE",
