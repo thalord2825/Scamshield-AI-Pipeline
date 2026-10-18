@@ -29,6 +29,7 @@ if ROOT_DIR not in sys.path:
 load_dotenv(os.path.join(ROOT_DIR, ".env"))
 
 from pipeline.two_tier_router import TwoTierRouter
+from api.visobert_app import router as visobert_router
 from api.schemas import (
     ScanRequest,
     StandardScanResponse,
@@ -54,6 +55,9 @@ app = FastAPI(
     description="2-Tier Cascaded AI Inference Service (Tier-1 ViSoBERT Fast-Path + Tier-2 5-Agent Forensic Council)",
     version="1.1.0",
 )
+# Direct model-inspection endpoint and /api/v1/scan share the same cached
+# fine-tuned ViSoBERT checkpoint (models/visobert_finetuned/).
+app.include_router(visobert_router)
 
 # Cross-Origin Resource Sharing (CORS) for local frontend & Spring Boot
 app.add_middleware(
@@ -64,7 +68,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Initialize router once on startup
+# The router loads and validates the saved ViSoBERT weights, tokenizer, and
+# training_report.json at startup. A missing checkpoint leaves the API unready;
+# it does not silently switch to the old regex-based classifier.
 router_instance: TwoTierRouter = None
 
 
@@ -150,7 +156,8 @@ def _build_recommendations(is_scam: bool, risk_level: str) -> List[str]:
 def scan_message(req: ScanRequest):
     """
     Main Scan Endpoint conforming to ScamShield Contract (docs/04_API_CONTRACTS_AND_SCHEMAS.md).
-    Processes message through Tier-1 Fast-Path, escalating to Tier-2 Council only when needed.
+    Tier 1 runs the trained ViSoBERT model using its saved calibration and
+    decision thresholds. REVIEW-band messages can escalate to Tier 2.
     """
     if not router_instance:
         raise HTTPException(
@@ -159,6 +166,8 @@ def scan_message(req: ScanRequest):
         )
 
     try:
+        # classify() invokes trained ViSoBERT inference for req.content.
+        # The other request fields are not model inputs at this stage.
         raw_res = router_instance.classify(req.content, force_tier2=req.force_tier2)
     except Exception as e:
         logger.error(f"Inference error during scan: {e}", exc_info=True)
@@ -171,9 +180,14 @@ def scan_message(req: ScanRequest):
     confidence = float(raw_res.get("final_confidence", 0.0))
     tier_executed = 2 if raw_res.get("escalated", False) else 1
 
-    # Map risk level
+    # Translate the model/router verdict into the public API's risk vocabulary.
+    # The radar and recommendation helpers below are presentation heuristics;
+    # they do not determine the ViSoBERT classification.
     raw_risk = raw_res.get("risk_level", "LOW").upper()
-    if is_scam:
+    if raw_res.get("final_label") in {"REVIEW", "SUSPICIOUS_REVIEW"}:
+        risk_level = "SUSPICIOUS"
+        risk_score = round(float(raw_res.get("tier1_telemetry", {}).get("scam_prob", 0.5)) * 100.0, 1)
+    elif is_scam:
         risk_level = "DANGEROUS" if raw_risk in ["CRITICAL", "HIGH", "DANGEROUS"] else "SUSPICIOUS"
         risk_score = round(confidence * 100.0, 1)
         if risk_score < 70.0 and risk_level == "DANGEROUS":
@@ -236,6 +250,7 @@ def scan_message(req: ScanRequest):
             "total_latency_ms": raw_res.get("total_latency_ms"),
             "total_cost_usd": raw_res.get("total_cost_usd"),
             "tier1": raw_res.get("tier1_telemetry"),
+            "final_label": raw_res.get("final_label"),
         },
     )
 

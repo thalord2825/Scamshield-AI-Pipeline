@@ -10,6 +10,11 @@ python-dotenv>=1.0.1
 # AI Inference & ONNX Runtime (CPU Fast-Path)
 onnxruntime>=1.17.0
 numpy>=1.24.0
+torch>=2.5,<3
+transformers>=4.44,<5
+sentencepiece>=0.2,<1
+safetensors>=0.4,<1
+onnx>=1.16,<2
 
 # HTTP & Remote Dynamic LLM Discovery
 requests>=2.31.0
