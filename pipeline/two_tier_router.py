@@ -18,7 +18,7 @@ import logging
 import os
 from typing import Dict, List, Optional, Any
 from .model_registry import ModelRegistry
-from api.visobert_app import PredictRequest, predict as predict_visobert, load_model
+from .visobert_classifier import get_visobert_classifier, ViSoBERTClassifier
 from .forensic_council import ForensicCouncil
 
 logger = logging.getLogger("ScamShield.TwoTierRouter")
@@ -31,20 +31,24 @@ if not logger.handlers:
 
 
 class TrainedViSoBERTClassifier:
-    """Adapt the saved ViSoBERT inference result to the router contract."""
+    """Adapt the ViSoBERT inference result to the router contract."""
+
+    def __init__(self, classifier: Optional[ViSoBERTClassifier] = None):
+        self.classifier = classifier or get_visobert_classifier()
 
     def predict(self, message: str) -> Dict[str, Any]:
-        result = predict_visobert(PredictRequest(message=message))
+        result = self.classifier.predict(message)
         return {
-            "label": result.decision,
-            "class_id": 1 if result.model_label == "SCAM" else 0,
-            "confidence": result.confidence,
-            "calibrated_scam_prob": result.scam_probability,
-            "latency_ms": result.latency_ms,
-            "matched_cues": [],
-            "temperature": result.temperature,
-            "threshold_low": result.threshold_low,
-            "threshold_high": result.threshold_high,
+            "label": result["decision"],
+            "class_id": result["class_id"],
+            "confidence": result["confidence"],
+            "calibrated_scam_prob": result["scam_probability"],
+            "latency_ms": result["latency_ms"],
+            "matched_cues": result.get("matched_cues", []),
+            "temperature": result["temperature"],
+            "threshold_low": result["threshold_low"],
+            "threshold_high": result["threshold_high"],
+            "engine": result.get("engine", "onnx"),
         }
 
 
@@ -91,7 +95,6 @@ class TwoTierRouter:
         """
         self.tau = confidence_threshold
         self.use_council = use_council
-        load_model()  # Fail startup if the trained checkpoint is unavailable.
         self.tier1_classifier = TrainedViSoBERTClassifier()
         def usable_key(value: Optional[str]) -> bool:
             return bool(value and not value.lower().startswith("your_"))
@@ -101,7 +104,12 @@ class TwoTierRouter:
             auto_discover=usable_key(api_key),
         )
         self.council = ForensicCouncil(config_path=council_config_path) if use_council else None
-        self.tier2_available = usable_key(api_key) or usable_key(os.getenv("GROQ_API_KEY"))
+        self.tier2_available = (
+            usable_key(api_key)
+            or usable_key(os.getenv("GROQ_API_KEY"))
+            or usable_key(os.getenv("OPENAI_API_KEY"))
+            or usable_key(os.getenv("ANTHROPIC_API_KEY"))
+        )
         mode_str = "5-Agent Forensic Council" if use_council else "Single Cloud LLM"
         logger.info(f"TwoTierRouter Initialized. Fallback Threshold (tau) = {self.tau:.2f} | Tier-2 Mode: {mode_str}")
 

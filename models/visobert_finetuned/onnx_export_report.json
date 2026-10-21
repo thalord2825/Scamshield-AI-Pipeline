@@ -1,5 +1,5 @@
 {
-  "onnx_path": "G:\\Subjects\\2026\\Fall26\\Scamshield-AI-Pipeline\\models\\visobert_finetuned\\visobert_classifier.onnx",
+  "onnx_path": "models/visobert_finetuned/visobert_classifier.onnx",
   "size_bytes": 390529526,
   "opset": 17,
   "providers_tested": [

@@ -85,11 +85,14 @@ Scamshield-AI-Pipeline/
 │
 ├── pipeline/                 # Core AI Engine
 │   ├── two_tier_router.py    # Orchestrator định tuyến 2 tầng
-│   ├── local_classifier.py   # ViSoBERT Local Classifier
-│   ├── forensic_council.py   # Multi-Agent Forensic Council
-│   └── model_registry.py     # Dynamic Google Gemini Registry
+│   ├── visobert_classifier.py# ViSoBERT Production Classifier (ONNX CPU Fast-Path + PyTorch)
+│   ├── local_classifier.py   # Heuristic semantic feature extraction
+│   ├── forensic_council.py   # 5-Agent Multi-LLM Forensic Council (Maker-Checker & Defender Veto)
+│   └── model_registry.py     # Dynamic Cloud Model Registry
 │
-├── scripts/                  # Scripts benchmark & fine-tuning
+├── scripts/                  # Scripts benchmark, training & ONNX export
+│   ├── train_visobert.py     # Fine-tune ViSoBERT với WBCE alpha=5.0
+│   ├── export_visobert_onnx.py # Export sang ONNX Runtime opset 17
 │   └── evaluate_council_benchmark.py
 │
 └── tests/                    # Kiểm thử tự động
