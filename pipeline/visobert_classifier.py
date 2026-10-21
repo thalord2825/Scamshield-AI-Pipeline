@@ -2,11 +2,8 @@
 ==============================================================================
 ScamShield-VN: ViSoBERT Classifier (Tier 1 Production Engine)
 ==============================================================================
-Provides high-performance text classification for Vietnamese SMS and chat.
-Supports:
-  1. ONNX Runtime CPU Fast-Path (< 35ms latency, ultra-lightweight RAM)
-  2. PyTorch SafeTensors (Local/CUDA fallback)
-  3. Safe Semantic / Heuristic Rule-Based Fallback (Zero-crash resilience)
+Provides high-performance text classification for Vietnamese SMS and chat using
+ONNX Runtime or PyTorch model inference.
 ==============================================================================
 """
 
@@ -14,11 +11,10 @@ import os
 import json
 import time
 import math
-import re
 import logging
 from functools import lru_cache
 from pathlib import Path
-from typing import Dict, Any, Optional, Tuple, List
+from typing import Dict, Any, Optional
 
 logger = logging.getLogger("ScamShield.ViSoBERTClassifier")
 if not logger.handlers:
@@ -27,6 +23,9 @@ if not logger.handlers:
     handler.setFormatter(formatter)
     logger.addHandler(handler)
     logger.setLevel(logging.INFO)
+    # This module owns its console handler. Stop records reaching the root
+    # handler configured by api.app, which would print each inference log twice.
+    logger.propagate = False
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_MODEL_DIR = ROOT_DIR / "models" / "visobert_finetuned"
@@ -57,7 +56,7 @@ class ViSoBERTClassifier:
 
     def __init__(self, model_dir: Optional[Path] = None):
         self.model_dir = Path(model_dir or os.getenv("VISOBERT_MODEL_DIR", DEFAULT_MODEL_DIR)).resolve()
-        self.engine_type = "heuristic_fallback"
+        self.engine_type = "unavailable"
         self.temperature = 1.4015
         self.threshold_low = 0.35
         self.threshold_high = 0.85
@@ -69,32 +68,8 @@ class ViSoBERTClassifier:
         self.torch_model = None
         self.tokenizer = None
 
-        # Compile heuristic fallback regex
-        self._init_heuristics()
-
         # Load configuration & weights
         self._load_config_and_weights()
-
-    def _init_heuristics(self):
-        self.scam_patterns = [
-            r"(?i)(trúng\s*thưởng|trung\s*thuong|nhận\s*quà|nhan\s*qua|tri\s*ân|tri\s*an)",
-            r"(?i)(khóa\s*tài\s*khoản|khoa\s*tai\s*khoan|tạm\s*khóa|tam\s*khoa|xác\s*thực|xac\s*thuc|cập\s*nhật\s*sinh\s*trắc)",
-            r"(?i)(bộ\s*công\s*an|bo\s*cong\s*an|viện\s*kiểm\s*sát|vien\s*kiem\s*sat|lệnh\s*bắt|lenh\s*bat|tạm\s*giam|tam\s*giam|rửa\s*tiền|rua\s*tien)",
-            r"(?i)(việc\s*nhẹ\s*lương\s*cao|viec\s*nhe|tuyển\s*ctv|tuyen\s*ctv|đánh\s*giá\s*sản\s*phẩm|hoa\s*hồng)",
-            r"(?i)(vay\s*tiền|vay\s*tien|duyệt\s*ngay|duyet\s*ngay|không\s*cần\s*thế\s*chấp|khong\s*can\s*the\s*chap|lãi\s*suất\s*0%)",
-            r"(?i)(link\s*đăng\s*nhập|link\s*dang\s*nhap|truy\s*cập\s*link|truy\s*cap\s*link|nhập\s*mã\s*otp|nhap\s*ma\s*otp|nhắn\s*zalo)",
-            r"(?i)(https?://[^\s]+\.(xyz|top|vip|cc|tk|ml|ga|cf|gq|info|online|site))",
-        ]
-        self.compiled_scam_regex = [re.compile(p) for p in self.scam_patterns]
-
-        self.ham_patterns = [
-            r"(?i)(mã\s*otp|ma\s*otp|otp\s*của\s*quý\s*khách|otp\s*xac\s*thuc|hieu\s*luc\s*trong\s*\d+\s*phut|không\s*chia\s*sẻ|khong\s*chia\s*se)",
-            r"(?i)(tài\s*khoản\s*thanh\s*toán|tiền\s*điện|tiền\s*nước|tien\s*dien|tien\s*nuoc|vcb\s*digibank|digibank|shopeepay|vietcombank)",
-            r"(?i)(gói\s*cước|goi\s*cuoc|gia\s*hạn\s*thành\s*công|data\s*sử\s*dụng|quy\s*khach|thue\s*bao)",
-            r"(?i)(chuyen\s*khoan\s*nhanh|giao\s*dich\s*thanh\s*cong|bien\s*dong\s*so\s*du|so\s*du\s*tk)",
-            r"(?i)(cảm\s*ơn\s*quý\s*khách|cam\s*on\s*quy\s*khach|ăn\s*lẩu|đi\s*chơi|cà\s*phê|alo\s*nhé)",
-        ]
-        self.compiled_ham_regex = [re.compile(p) for p in self.ham_patterns]
 
     def _load_config_and_weights(self):
         # 1. Load parameters from training_report.json or config.json
@@ -162,16 +137,13 @@ class ViSoBERTClassifier:
                 logger.info("PyTorch engine successfully initialized on device %s.", self.device_str)
                 return
             except Exception as e:
-                logger.warning("PyTorch initialization failed (%s). Falling back to heuristic engine.", e)
+                logger.warning("PyTorch initialization failed: %s", e)
 
-        # 4. Fallback: Semantic Rule Engine (Engine C)
         logger.warning(
-            "ViSoBERT binary model weights not found or are un-smudged Git LFS pointers in %s. "
-            "Operating with high-fidelity semantic heuristic engine. "
-            "To activate full 110M neural model, run 'git lfs pull'.",
+            "ViSoBERT model weights are unavailable or are un-smudged Git LFS pointers in %s. "
+            "Run 'git lfs pull' and ensure ONNX Runtime or PyTorch dependencies are installed.",
             self.model_dir
         )
-        self.engine_type = "heuristic_fallback"
 
     def _predict_onnx(self, message: str) -> float:
         encoded = self.tokenizer(
@@ -206,47 +178,25 @@ class ViSoBERTClassifier:
             scam_prob = float(torch.softmax(logits / self.temperature, dim=-1)[0, 1].item())
         return scam_prob
 
-    def _predict_heuristic(self, message: str) -> Tuple[float, List[str]]:
-        scam_score = 0.0
-        ham_score = 0.0
-        matched_cues = []
-
-        for p in self.compiled_scam_regex:
-            m = p.search(message)
-            if m:
-                scam_score += 2.2
-                matched_cues.append(f"ScamPattern[{m.group(0)[:30]}]")
-
-        for p in self.compiled_ham_regex:
-            m = p.search(message)
-            if m:
-                ham_score += 1.8
-                matched_cues.append(f"HamPattern[{m.group(0)[:30]}]")
-
-        urls = re.findall(r"https?://[^\s]+", message)
-        for u in urls:
-            if any(tld in u for tld in [".xyz", ".top", ".vip", ".cc", "bit.ly"]):
-                scam_score += 2.5
-                matched_cues.append(f"SuspiciousDomain[{u}]")
-
-        diff = scam_score - ham_score
-        calibrated_logit = diff / self.temperature
-        scam_prob = 1.0 / (1.0 + math.exp(-calibrated_logit))
-        return scam_prob, matched_cues
-
     def predict(self, message: str) -> Dict[str, Any]:
         """
         Classifies a message and returns calibrated probabilities and tri-decision verdict.
         """
         started = time.perf_counter()
-        matched_cues = []
-
+        logger.info(
+            "ViSoBERT inference started: engine=%s device=%s message_chars=%d",
+            self.engine_type, self.device_str, len(message),
+        )
         if self.engine_type == "onnx" and self.ort_session is not None:
             scam_prob = self._predict_onnx(message)
         elif self.engine_type == "pytorch" and self.torch_model is not None:
             scam_prob = self._predict_pytorch(message)
         else:
-            scam_prob, matched_cues = self._predict_heuristic(message)
+            logger.error("ViSoBERT inference unavailable: no ONNX or PyTorch model is loaded")
+            raise RuntimeError(
+                "ViSoBERT inference is unavailable: no ONNX or PyTorch model loaded. "
+                "Run 'git lfs pull' and ensure the inference dependencies are installed."
+            )
 
         # Apply Decision Thresholds
         if scam_prob < self.threshold_low:
@@ -259,6 +209,12 @@ class ViSoBERTClassifier:
         confidence = max(scam_prob, 1.0 - scam_prob)
         model_label = "SCAM" if scam_prob >= 0.5 else "HAM"
         latency_ms = (time.perf_counter() - started) * 1000
+        logger.info(
+            "ViSoBERT inference completed: engine=%s device=%s decision=%s model_label=%s "
+            "scam_probability=%.4f confidence=%.4f latency_ms=%.2f",
+            self.engine_type, self.device_str, decision, model_label,
+            scam_prob, confidence, latency_ms,
+        )
 
         return {
             "decision": decision,
@@ -274,7 +230,6 @@ class ViSoBERTClassifier:
             "latency_ms": round(latency_ms, 2),
             "engine": self.engine_type,
             "device": self.device_str,
-            "matched_cues": matched_cues,
         }
 
 
