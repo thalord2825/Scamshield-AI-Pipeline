@@ -86,7 +86,6 @@ Scamshield-AI-Pipeline/
 ├── pipeline/                 # Core AI Engine
 │   ├── two_tier_router.py    # Orchestrator định tuyến 2 tầng
 │   ├── visobert_classifier.py# ViSoBERT Production Classifier (ONNX CPU Fast-Path + PyTorch)
-│   ├── local_classifier.py   # Heuristic semantic feature extraction
 │   ├── forensic_council.py   # 5-Agent Multi-LLM Forensic Council (Maker-Checker & Defender Veto)
 │   └── model_registry.py     # Dynamic Cloud Model Registry
 │
