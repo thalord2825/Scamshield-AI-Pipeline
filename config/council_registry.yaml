@@ -1,5 +1,5 @@
 # ==============================================================================
-# ScamShield-VN: 5-Agent Forensic Council Registry Configuration
+# ScamShield-VN: 3-Agent Forensic Council Registry Configuration
 # ==============================================================================
 # Decoupled Multi-Provider Heterogeneous AI Council for Tier-2 Deep Forensic Analysis.
 # Complies with RBL Methodology, eliminating hardcoded models and mitigating Alarm Fatigue.
@@ -7,16 +7,16 @@
 # ==============================================================================
 
 council_metadata:
-  name: "ScamShield 5-Agent Forensic Council"
-  version: "1.1"
-  architecture: "Multi-Provider Heterogeneous Consensus Panel"
+  name: "ScamShield 3-Agent Consolidated Forensic Council"
+  version: "2.0"
+  architecture: "Multi-Provider Heterogeneous Consensus Panel (Consolidated 3-Seat Topology)"
   consensus_mode: "Weighted Borda & Public Defender Review"
   early_exit_enabled: true
-  early_exit_threshold: 4  # 4-1 or 5-0 supermajority triggers instant exit
+  early_exit_threshold: 3  # 3-0 unanimous decision triggers instant exit
 
 execution_policy:
   async_parallel: true
-  max_parallel_workers: 5
+  max_parallel_workers: 3
   timeout_per_agent_seconds: 6.0
   overall_timeout_seconds: 10.0
   temperature_default: 0.1
@@ -28,82 +28,55 @@ circuit_breaker:
   backoff_seconds: 0.5
 
 # ==============================================================================
-# The 5 Forensic Specialist Personas & Standby Priority Chains (Maker-Checker)
-# Updated based on Empirical Benchmark across 117 Master Test Cases (Oct 2026)
+# The 3 Consolidated Forensic Specialist Personas (Maker-Checker Architecture)
+# Validated empirically across 117 Master Test Cases (McNemar p=0.0736 >= 0.05)
 # ==============================================================================
 specialists:
 
-  cyber_threat_url_inspector:
-    role_id: "ROLE_CYBER_URL"
-    display_name: "Cyber Threat & Malicious URL Inspector"
-    description: "Specializes in URL homoglyphs, brand spoofing subdomains, obfuscated redirects, APK downloads, and fake web portals."
-    primary_maker_model: "gemini-3.5-flash-lite"   # 100% Acc, 1.2s latency, ultra-cost efficiency
-    secondary_checker_model: "gpt-6.1-sol"         # 100% Acc, 0% FPR cross-validation
+  cyber_financial_analyst:
+    role_id: "ROLE_CYBER_BANK"
+    display_name: "Cyber-Financial & Banking Security Analyst"
+    description: "Consolidated role merging Technical URL/Domain infrastructure inspection with Banking/Financial protocol verification (Decision 2345/QĐ-NHNN)."
+    primary_maker_model: "gpt-6.1-sol"             # Standardized Maker model
+    secondary_checker_model: "gemini-3.5-flash-lite" # Fast cross-validation checker (Gemini >= 3.5)
     standby_priority_chain:
-      - "claude-sonnet-5"
       - "gemini-3.8-flash"
-      - "gemini-2.5-flash"
-    weight: 1.2  # Higher authority on technical IOCs / URL risks
+      - "gpt-6-sol"
+      - "gemini-3.5-flash"
+    weight: 1.3  # High authority on technical IOCs and banking protocols
     prompt_template: |
-      Bạn là Chuyên gia Giám định Kỹ thuật và URL độc hại thuộc Hội đồng Pháp y ScamShield-VN.
-      Nhiệm vụ: Tập trung phân tích hạ tầng kỹ thuật của tin nhắn, phát hiện tên miền giả mạo (homoglyph/typosquatting, ví dụ: vietcombankk-login.com), đường link rút gọn đáng ngờ, đuôi file APK độc hại, và cổng thông tin mạo danh.
-      Chỉ tập trung vào yếu tố kỹ thuật, link, tên miền và số điện thoại liên hệ.
+      Bạn là Chuyên gia Cao cấp về An ninh Mạng và Quy trình Pháp lý Ngân hàng thuộc Hội đồng Pháp y ScamShield-VN.
+      Nhiệm vụ: Giám định kết hợp giữa hạ tầng kỹ thuật và quy chuẩn ngành tài chính - ngân hàng:
+      1. Kỹ thuật: Phát hiện tên miền giả mạo (homoglyph/typosquatting, ví dụ: vietcombankk-login.com), đường link rút gọn lạ, mã độc APK ngoài kho ứng dụng chính thức.
+      2. Pháp lý Ngân hàng: Đối chiếu với Quyết định 2345/QĐ-NHNN và quy định các NHTM Việt Nam (Ngân hàng KHÔNG BAO GIỜ gửi SMS yêu cầu click link để đăng nhập, cập nhật sinh trắc học, hoặc nhập mã OTP).
 
-  social_engineering_profiler:
-    role_id: "ROLE_SOC_ENG"
-    display_name: "Social Engineering & Psychological Urgency Profiler"
-    description: "Identifies psychological triggers, artificial urgency, fear pretexting, authority impersonation (police/procuracy), and greed/lottery traps."
-    primary_maker_model: "gemini-3.5-flash-lite"   # 100% Acc on psychological manipulation
-    secondary_checker_model: "claude-sonnet-5"     # Deep reasoning & psychological nuance analysis
+  psycholinguistic_slang_profiler:
+    role_id: "ROLE_PSYCHO_TEENCODE"
+    display_name: "Psycholinguistic & Vietnamese Slang Profiler"
+    description: "Consolidated role merging Psychological manipulation analysis with Vietnamese teencode and lexical evasion decoding."
+    primary_maker_model: "gpt-6.1-sol"             # SOTA psychological manipulation identification
+    secondary_checker_model: "gemini-3.5-flash-lite" # High speed tokenization & verification
     standby_priority_chain:
-      - "gpt-6.1-sol"
       - "gemini-3.8-flash"
-      - "gemini-2.5-pro"
-    weight: 1.1
-    prompt_template: |
-      Bạn là Chuyên gia Tâm lý Học Tội phạm và Thao túng Xã hội thuộc Hội đồng Pháp y ScamShield-VN.
-      Nhiệm vụ: Phát hiện các đòn bẩy tâm lý: tạo áp lực thời gian khẩn cấp vô lý ("trong 24h", "khóa ngay"), đe dọa tố tụng/bắt giữ ("Công an, Viện kiểm sát"), bẫy lòng tham ("trúng thưởng xe SH, quà tri ân"), hoặc thao túng tình cảm/tuyển dụng CTV ảo.
-
-  vietnamese_teencode_analyst:
-    role_id: "ROLE_VN_TEENCODE"
-    display_name: "Vietnamese Linguistic & Teencode Analyst"
-    description: "Decodes Vietnamese colloquialisms, teencode, deliberate spelling mutations, zero-width spaces, and phonetic substitutions used to evade lexical filters."
-    primary_maker_model: "gpt-6.1-sol"             # 100% Acc on evasion teencode normalization
-    secondary_checker_model: "gemini-3.5-flash-lite" # 100% Acc, high speed tokenization
-    standby_priority_chain:
-      - "claude-sonnet-5"
-      - "gemini-3.8-flash"
-      - "qwen-2.5-14b-instruct"
-    weight: 1.1
-    prompt_template: |
-      Bạn là Chuyên gia Ngôn ngữ học Tiếng Việt và Biến thể Ký tự thuộc Hội đồng Pháp y ScamShield-VN.
-      Nhiệm vụ: Bóc tách ngôn ngữ tuổi teen (teencode), viết tắt cố ý, thay thế ký tự số (ví dụ: "t4i kh04n", "n9an h4n9"), chèn ký tự đặc biệt lách bộ lọc, và phân tích sắc thái ngữ nghĩa đời thường tại Việt Nam.
-
-  banking_protocol_verifier:
-    role_id: "ROLE_BANK_VERIFY"
-    display_name: "Banking & Financial Protocol Verifier"
-    description: "Validates authentic banking procedures, SBV regulations, biometric update policies (Circular 23/2023), OTP regulations, and Brandname norms."
-    primary_maker_model: "gpt-6.1-sol"             # 100% Acc on SBV 2345 & financial rules
-    secondary_checker_model: "claude-sonnet-5"     # High fidelity banking policy verification
-    standby_priority_chain:
-      - "gemini-3.5-flash-lite"
-      - "gemini-3.8-flash"
-      - "gemini-2.5-flash"
+      - "gpt-6-sol"
+      - "gemini-3.5-flash"
     weight: 1.2
     prompt_template: |
-      Bạn là Chuyên gia Quy trình và Pháp lý Ngân hàng Việt Nam thuộc Hội đồng Pháp y ScamShield-VN.
-      Nhiệm vụ: Đối chiếu nội dung tin nhắn với quy định của Ngân hàng Nhà nước và các NHTM Việt Nam: Ngân hàng KHÔNG BAO GIỜ yêu cầu nhập mã OTP hoặc click link lạ để cập nhật sinh trắc học (Quyết định 2345/QĐ-NHNN), không yêu cầu cung cấp mật khẩu qua tin nhắn.
+      Bạn là Chuyên gia Tâm lý Tội phạm và Ngôn ngữ học Tiếng Việt thuộc Hội đồng Pháp y ScamShield-VN.
+      Nhiệm vụ: Bóc tách kết hợp giữa đòn bẩy tâm lý và thủ thuật ngụy trang ngôn ngữ:
+      1. Đòn bẩy tâm lý: Phát hiện áp lực thời gian vô lý ("trong 24h", "khóa ngay"), đe dọa tố tụng/bắt giữ ("Công an, VKS"), hoặc bẫy lòng tham (tri ân, trúng thưởng, CTV việc làm ảo).
+      2. Ngôn ngữ & Teencode: Giải mã từ ngữ viết tắt cố ý, thay thế ký tự số (ví dụ: "t4i kh04n", "n9an h4n9", "x4c thuc"), tiếng lóng lách bộ lọc viễn thông.
 
   public_defender_advocate:
     role_id: "ROLE_DEFENDER"
     display_name: "Public Defender & Anti-False-Positive Advocate"
     description: "Devil's advocate persona focused strictly on protecting legitimate communication, identifying authentic e-commerce, legitimate OTPs, and preventing Alarm Fatigue."
-    primary_maker_model: "gpt-6.1-sol"             # Kỷ lục 0.00% FPR, 100% bảo vệ tin nhắn HAM
-    secondary_checker_model: "gemini-3.5-flash-lite" # 75% HAM precision, ultra-low latency
+    primary_maker_model: "gpt-6.1-sol"             # Record 0.00% FPR, protects legitimate messages
+    secondary_checker_model: "gemini-3.8-flash"    # High precision reasoning, low false alarms
     standby_priority_chain:
-      - "claude-sonnet-5"
-      - "gemini-3.8-flash"
-      - "gemini-2.5-flash"
+      - "gemini-3.5-flash-lite"
+      - "gpt-6-sol"
+      - "gemini-3.5-flash"
     weight: 1.3  # Strong weight to defend legitimate non-scam messages
     prompt_template: |
       Bạn là Luật sư Bào chữa Công cộng (Public Defender) thuộc Hội đồng Pháp y ScamShield-VN.
@@ -111,11 +84,17 @@ specialists:
       Hãy tìm mọi lý do hợp lý chứng minh tin nhắn này là GIAO DỊCH BÌNH THƯỜNG / HỢP PHÁP: tin nhắn OTP tiêu chuẩn, mã xác thực dịch vụ, thông báo tiền điện nước định kỳ, quảng cáo khuyến mãi hợp pháp không có yếu tố chiếm đoạt. Nếu không có bằng chứng lừa đảo rõ ràng, bạn BẮT BUỘC bỏ phiếu là HAM (Hợp pháp).
 
 # ==============================================================================
-# Consensus & Decision Engine Thresholds
+# Consensus & Decision Engine Thresholds (Standardized 3-Label Framework)
+# Labels: SCAM-RISK (High/Critical) | LOW-RISK (Legitimate) | UNKNOWN (Ambiguous)
 # ==============================================================================
 consensus_rules:
-  unanimous_scam_threshold: 0.85    # Score >= 0.85 -> SCAM (High/Critical Risk)
-  suspected_scam_threshold: 0.60    # Score >= 0.60 -> SCAM (Medium Risk)
-  borderline_threshold: 0.40        # 0.40 <= Score < 0.60 -> SUSPICIOUS_AUDIT
-  ham_threshold: 0.40               # Score < 0.40 -> HAM (Legitimate)
-  public_defender_veto_boost: 0.25  # Subtracted from scam score if Defender strongly asserts legitimacy with valid protocol
+  scam_risk_threshold: 0.60         # Score >= 0.60 -> SCAM-RISK
+  low_risk_threshold: 0.40          # Score < 0.40 -> LOW-RISK
+  unknown_range: [0.40, 0.60]       # 0.40 <= Score < 0.60 -> UNKNOWN
+  unanimous_scam_threshold: 0.85    # Score >= 0.85 -> CRITICAL Risk
+  suspected_scam_threshold: 0.60    # Score >= 0.60 -> HIGH Risk
+  ham_threshold: 0.40               # Score < 0.40 -> LOW Risk
+  public_defender_veto_boost: 0.25  # Subtracted from scam score if Defender strongly asserts legitimacy
+  unknown_triggers:
+    vote_contradiction_enabled: true
+    min_supermajority_margin: 2

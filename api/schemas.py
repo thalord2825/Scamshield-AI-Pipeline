@@ -7,22 +7,31 @@ Complies with docs/04_API_CONTRACTS_AND_SCHEMAS.md for Frontend React & Spring B
 """
 
 from typing import List, Optional, Dict, Any, Literal
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class ScanRequest(BaseModel):
     """Payload sent by Client / Spring Boot Backend to scan an incoming message."""
-    content: str = Field(..., description="Message text or content to scan")
+    content: Optional[str] = Field(None, description="Message text or content to scan")
+    message: Optional[str] = Field(None, description="Alternative field for message content")
     sender: Optional[str] = Field(None, description="Phone number, email or brand header")
     check_type: Literal["TEXT", "URL", "PHONE", "BANK_ACCOUNT"] = Field("TEXT", description="Type of verification")
     target_bank: Optional[str] = Field(None, description="Bank code (e.g. VCB, MB, BIDV)")
     target_account_number: Optional[str] = Field(None, description="Bank account number if check_type is BANK_ACCOUNT")
     force_tier2: bool = Field(False, description="Force Tier-2 Council execution regardless of Tier 1 confidence")
 
+    @model_validator(mode="after")
+    def validate_content_or_message(self):
+        if not self.content and not self.message:
+            raise ValueError("Either 'content' or 'message' must be provided.")
+        if not self.content and self.message:
+            self.content = self.message
+        return self
+
 
 class AgentFinding(BaseModel):
     role: str
-    verdict: Literal["SAFE", "SUSPICIOUS", "DANGEROUS"]
+    verdict: Literal["SAFE", "SUSPICIOUS", "DANGEROUS", "UNKNOWN"]
     score: float
     finding: str
 
@@ -44,7 +53,7 @@ class RadarMetrics(BaseModel):
 
 
 class Verdict(BaseModel):
-    risk_level: Literal["SAFE", "SUSPICIOUS", "DANGEROUS"]
+    risk_level: Literal["SAFE", "SUSPICIOUS", "DANGEROUS", "UNKNOWN"]
     risk_score: float = Field(..., ge=0.0, le=100.0)
     scam_category: str
     confidence: float = Field(..., ge=0.0, le=1.0)
@@ -54,7 +63,7 @@ class Verdict(BaseModel):
 class ScanResultData(BaseModel):
     scan_id: str
     timestamp: str
-    tier_executed: int = Field(..., description="1: ViSoBERT On-Device/CPU | 2: Cloud 5-Agent Council")
+    tier_executed: int = Field(..., description="1: ViSoBERT On-Device/CPU | 2: Cloud 3-Agent Council")
     verdict: Verdict
     radar_metrics: RadarMetrics
     council_breakdown: Optional[CouncilBreakdown] = None
