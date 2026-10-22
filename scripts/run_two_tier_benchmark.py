@@ -12,6 +12,7 @@ Description:
       - Logs per-sample telemetry in real-time
       - Records exact count of API calls made, latency, cost, and routing path
       - Stores results into SQLite DB and JSONL
+      - Built-in SQLite Cache for Tier-2 LLM responses (prevents re-billing)
 ==============================================================================
 """
 
@@ -21,6 +22,7 @@ import csv
 import json
 import time
 import uuid
+import hashlib
 import sqlite3
 import argparse
 import logging
@@ -61,7 +63,7 @@ def parse_args():
     parser.add_argument(
         "--dataset",
         type=str,
-        default=os.path.join(ROOT_DIR, "data", "raw", "vietnamese_sms_test.csv"),
+        default=os.path.join(ROOT_DIR, "data", "raw", "vietnamese_sms_merged_all.csv"),
         help="Path to CSV/JSONL dataset file",
     )
     parser.add_argument("--limit", type=int, default=0, help="Number of samples to evaluate (0 for all)")
@@ -70,7 +72,7 @@ def parse_args():
         "--db-path",
         type=str,
         default=os.path.join(ROOT_DIR, "experiments", "benchmark_results.db"),
-        help="SQLite database path for persisting run telemetry",
+        help="SQLite database path for persisting run telemetry and cache",
     )
     parser.add_argument(
         "--output-dir",
@@ -106,6 +108,38 @@ def init_db(db_path: str):
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     """)
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS tier2_response_cache (
+        msg_hash TEXT PRIMARY KEY,
+        message TEXT,
+        response_json TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+    conn.commit()
+    conn.close()
+
+
+def get_cached_council_response(db_path: str, message: str) -> Optional[Dict[str, Any]]:
+    msg_hash = hashlib.sha256(message.strip().encode("utf-8")).hexdigest()
+    conn = sqlite3.connect(db_path)
+    cur = conn.cursor()
+    cur.execute("SELECT response_json FROM tier2_response_cache WHERE msg_hash = ?", (msg_hash,))
+    row = cur.fetchone()
+    conn.close()
+    if row:
+        return json.loads(row[0])
+    return None
+
+
+def set_cached_council_response(db_path: str, message: str, response: Dict[str, Any]):
+    msg_hash = hashlib.sha256(message.strip().encode("utf-8")).hexdigest()
+    conn = sqlite3.connect(db_path)
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT OR REPLACE INTO tier2_response_cache (msg_hash, message, response_json) VALUES (?, ?, ?)",
+        (msg_hash, message[:500], json.dumps(response, ensure_ascii=False)),
+    )
     conn.commit()
     conn.close()
 
@@ -133,7 +167,7 @@ def load_dataset(filepath: str, limit: int = 0) -> List[Dict[str, Any]]:
                 msg = row.get("message") or row.get("\ufeffmessage") or ""
                 gold = row.get("label") or ""
                 gold_norm = "SCAM" if any(k in str(gold).upper() for k in ["SCAM", "SPAM", "1"]) else "HAM"
-                sid = row.get("id") or row.get("message_id") or f"SMS-{idx:04d}"
+                sid = row.get("message_id") or row.get("id") or f"SMS-{idx:04d}"
                 if msg.strip():
                     samples.append({"sample_id": str(sid), "message": msg.strip(), "gold_label": gold_norm})
                 if limit > 0 and len(samples) >= limit:
@@ -149,8 +183,9 @@ def run_benchmark():
 
     samples = load_dataset(args.dataset, limit=limit)
     total_samples = len(samples)
+    dataset_name = os.path.basename(args.dataset)
     run_id = f"RUN-{datetime_tag()}-{args.mode.upper()}"
-    logger.info(f"Loaded {total_samples} samples from {args.dataset}. Starting mode: {args.mode} (run_id: {run_id})")
+    logger.info(f"Loaded {total_samples} samples from {dataset_name}. Starting mode: {args.mode} (run_id: {run_id})")
 
     # Initialize components according to mode
     tier1_classifier = None
@@ -163,6 +198,19 @@ def run_benchmark():
         council = ForensicCouncil()
     if args.mode in ("all", "cascaded"):
         router = TwoTierRouter(use_council=True)
+        # Hook council evaluate_sync with SQLite response cache
+        if router.council:
+            original_eval = router.council.evaluate_sync
+
+            def cached_eval(message: str, active_roles=None):
+                cached = get_cached_council_response(args.db_path, message)
+                if cached:
+                    return cached
+                res = original_eval(message, active_roles=active_roles)
+                set_cached_council_response(args.db_path, message, res)
+                return res
+
+            router.council.evaluate_sync = cached_eval
 
     modes_to_execute = [args.mode] if args.mode != "all" else ["tier1_only", "tier2_only", "cascaded"]
 
@@ -174,6 +222,7 @@ def run_benchmark():
         total_latency = 0.0
         total_cost = 0.0
         total_calls = 0
+        bench_start = time.perf_counter()
 
         for idx, s in enumerate(samples, 1):
             sid = s["sample_id"]
@@ -194,7 +243,12 @@ def run_benchmark():
                 cost = 0.0
 
             elif active_mode == "tier2_only":
-                res = council.evaluate_sync(msg)
+                cached_res = get_cached_council_response(args.db_path, msg)
+                if cached_res:
+                    res = cached_res
+                else:
+                    res = council.evaluate_sync(msg)
+                    set_cached_council_response(args.db_path, msg, res)
                 elapsed_ms = (time.perf_counter() - t0) * 1000
                 final_lbl = res["final_label"]
                 pred = "SCAM" if final_lbl == "SCAM-RISK" else ("HAM" if final_lbl == "LOW-RISK" else "UNKNOWN")
@@ -244,11 +298,16 @@ def run_benchmark():
             }
             telemetry_records.append(rec)
 
-            # Real-time Per-Sample Telemetry Logging (AGENTS.md Requirement)
-            logger.info(
-                f"[{idx}/{total_samples}] Mode={active_mode} ID={sid} Gold={gold} Pred={pred} "
-                f"Correct={bool(is_correct)} Latency={elapsed_ms:.1f}ms Calls={api_calls} Path={routing_path}"
-            )
+            # Log periodic status or significant events (escalations/errors)
+            if idx % 50 == 0 or idx == total_samples or escalated:
+                elapsed_total = time.perf_counter() - bench_start
+                avg_time = elapsed_total / idx
+                eta_s = avg_time * (total_samples - idx)
+                logger.info(
+                    f"[{idx}/{total_samples} - {idx/total_samples*100:.1f}%] Mode={active_mode} ID={sid} "
+                    f"Gold={gold} Pred={pred} Lat={elapsed_ms:.1f}ms Calls={api_calls} Path={routing_path} "
+                    f"| Acc={correct_count/idx*100:.1f}% | ETA={eta_s/60:.1f}m"
+                )
 
         # Print summary for this mode
         acc = (correct_count / total_samples) * 100.0 if total_samples else 0.0
