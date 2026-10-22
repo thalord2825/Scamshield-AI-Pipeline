@@ -1,6 +1,23 @@
-version: "3.8"
-
 services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: scamshield-ai-postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-scamshield_ai}
+      POSTGRES_USER: ${POSTGRES_USER:-scamshield}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-scamshield}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - scamshield-ai-postgres-data:/var/lib/postgresql/data
+      - ./db/init/001_ai_service.sql:/docker-entrypoint-initdb.d/001_ai_service.sql:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   scamshield-ai-engine:
     build:
       context: .
@@ -8,17 +25,32 @@ services:
     container_name: scamshield-ai-engine
     ports:
       - "8000:8000"
-    environment:
-      - PORT=8000
-      - HOST=0.0.0.0
-      - TIER1_CONFIDENCE_THRESHOLD=0.90
-      - USE_COUNCIL=true
-      - GEMINI_API_KEY=${GEMINI_API_KEY}
     env_file:
-      - .env
+      - path: .env
+        required: false
+    environment:
+      PORT: 8000
+      HOST: 0.0.0.0
+      TIER1_CONFIDENCE_THRESHOLD: ${TIER1_CONFIDENCE_THRESHOLD:-0.90}
+      USE_COUNCIL: ${USE_COUNCIL:-true}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-scamshield}:${POSTGRES_PASSWORD:-scamshield}@postgres:5432/${POSTGRES_DB:-scamshield_ai}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      QWEN_API_KEY: ${QWEN_API_KEY:-}
+      VIBI_BASE_URL: ${VIBI_BASE_URL:-https://vibi.top/v1}
+    depends_on:
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
       timeout: 5s
       retries: 3
+
+volumes:
+  scamshield-ai-postgres-data:

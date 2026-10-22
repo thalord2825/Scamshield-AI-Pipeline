@@ -1,0 +1,40 @@
+# Local Python environments and bytecode
+.venv/
+venv/
+ENV/
+env/
+__pycache__/
+*.py[cod]
+
+# Git metadata and local agent configuration
+.git/
+.agents/
+.codex/
+
+# Local configuration and secrets (Compose injects environment variables)
+.env
+*.env
+secrets.json
+api_key.txt
+
+# Tests, caches, and reports not used by the runtime image
+tests/
+.pytest_cache/
+.coverage
+htmlcov/
+*.log
+
+# Training and benchmark data
+data/
+*.csv
+*.parquet
+*.jsonl
+
+# Editor and operating system files
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+desktop.ini

@@ -30,6 +30,7 @@ load_dotenv(os.path.join(ROOT_DIR, ".env"))
 
 from pipeline.two_tier_router import TwoTierRouter
 from api.visobert_app import router as visobert_router
+from pipeline.persistence import check_database, save_scan
 from api.schemas import (
     ScanRequest,
     StandardScanResponse,
@@ -96,12 +97,14 @@ def health_check():
     """Health check endpoint for Docker container & Kubernetes readiness probe."""
     tier1_ready = router_instance is not None and router_instance.tier1_classifier is not None
     tier2_ready = router_instance is not None and (router_instance.council is not None or router_instance.tier2_registry is not None)
+    database_ready = check_database()
     return HealthResponse(
-        status="healthy" if (tier1_ready and tier2_ready) else "degraded",
+        status="healthy" if (tier1_ready and tier2_ready and database_ready) else "degraded",
         version="1.1.0",
         service="ScamShield AI Pipeline Engine",
         tier1_ready=tier1_ready,
         tier2_ready=tier2_ready,
+        database_ready=database_ready,
     )
 
 
@@ -253,6 +256,28 @@ def scan_message(req: ScanRequest):
             "final_label": raw_res.get("final_label"),
         },
     )
+
+    try:
+        save_scan(
+            content=req.content,
+            input_type=(
+                req.check_type
+                if req.check_type in {"URL", "PHONE", "BANK_ACCOUNT"}
+                else "MESSAGE"
+            ),
+            core_check_id=req.core_check_id,
+            raw_result=raw_res,
+            verdict="UNKNOWN" if raw_res.get("final_label") in {"REVIEW", "SUSPICIOUS_REVIEW"} else "SCAM_RISK" if is_scam else "LOW_RISK",
+            confidence=confidence,
+            explanation=raw_res.get("explanation", "Kết quả phân tích từ AI Engine"),
+            guidance="\n".join(recommendations),
+        )
+    except Exception as e:
+        logger.error("Failed to persist scan result: %s", e, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Inference completed but the result could not be saved to the database.",
+        ) from e
 
     return StandardScanResponse(status="success", data=result_data)
 
