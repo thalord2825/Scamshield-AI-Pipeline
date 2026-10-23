@@ -9,12 +9,13 @@ Uses pipeline.visobert_classifier as the core inference engine.
 
 import logging
 import uuid
-from typing import Literal
+from typing import Literal, Optional
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field, field_validator
 
 from pipeline.visobert_classifier import get_visobert_classifier
+from pipeline.persistence import save_prediction
 
 router = APIRouter(prefix="/api/v1/visobert", tags=["ViSoBERT"])
 logger = logging.getLogger("ScamShield.ViSoBERT")
@@ -22,6 +23,7 @@ logger = logging.getLogger("ScamShield.ViSoBERT")
 
 class PredictRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=10000)
+    core_check_id: Optional[int] = Field(None, gt=0, description="Core check_requests.id used as the idempotency key")
 
     @field_validator("message")
     @classmethod
@@ -55,6 +57,14 @@ def predict(request: PredictRequest):
     try:
         classifier = get_visobert_classifier()
         result = classifier.predict(request.message)
+        try:
+            save_prediction(message=request.message, core_check_id=request.core_check_id, result=result)
+        except Exception as exc:
+            logger.exception("ViSoBERT result persistence failed: id=%s", request_id)
+            raise HTTPException(
+                status_code=503,
+                detail="Inference completed but the result could not be saved to the database.",
+            ) from exc
         logger.info(
             "ViSoBERT prediction complete: id=%s engine=%s prob=%.4f decision=%s lat_ms=%.2f",
             request_id, result["engine"], result["scam_probability"], result["decision"], result["latency_ms"]
@@ -70,6 +80,8 @@ def predict(request: PredictRequest):
             latency_ms=result["latency_ms"],
             engine=result["engine"],
         )
+    except HTTPException:
+        raise
     except Exception as exc:
         logger.exception("ViSoBERT prediction error: id=%s", request_id)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
