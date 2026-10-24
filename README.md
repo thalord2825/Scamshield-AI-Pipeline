@@ -5,11 +5,11 @@
 [![Architecture](https://img.shields.io/badge/Architecture-2--Tier%20Cascaded%20Router-orange.svg)]()
 [![Git LFS](https://img.shields.io/badge/Git%20LFS-Enabled-blueviolet.svg)](https://git-lfs.com/)
 
-> **Microservice & Standalone AI Inference Engine** chuyên dụng phát hiện tin nhắn lừa đảo tiếng Việt thời gian thực (SMS, OTT, Zalo, Telegram, Facebook) dựa trên kiến trúc phân tầng **2-Tier Cascaded AI Router**.
+> **Microservice và bộ máy suy luận AI độc lập** chuyên phát hiện tin nhắn lừa đảo tiếng Việt theo thời gian thực trên SMS, OTT, Zalo, Telegram và Facebook, sử dụng kiến trúc định tuyến AI phân tầng hai cấp.
 
 ---
 
-## 🏛️ Kiến trúc 2-Tier Cascaded Router
+## 🏛️ Kiến trúc bộ định tuyến AI hai cấp
 
 ```
                       [ Tin nhắn người dùng ]
@@ -17,8 +17,8 @@
                                  ▼
                      ┌───────────────────────┐
                      │   TIER 1 (Fast-Path)  │
-                     │ ViSoBERT ONNX on CPU  │
-                     │  Latency: < 45ms      │
+                     │ ViSoBERT ONNX / PyTorch│
+                     │ Local inference        │
                      │  Chi phí: $0.00       │
                      └───────────┬───────────┘
                                  │
@@ -39,11 +39,11 @@
                                           [ Phán quyết chi tiết ]
 ```
 
-1. **Tier 1 (Fast-Path Local CPU)**:
-   - Mô hình nền tảng: Fine-tuned **ViSoBERT** xuất sang **ONNX Runtime INT8/FP32**.
-   - Kỹ thuật chuẩn hóa: **Temperature Scaling** ($T^*=1.0$) và **Cost-Sensitive WBCE** ($\alpha=5.0$) chống lọt lừa đảo (False Negative).
-   - Bộ lọc Heuristics tiếng Việt bắt nhanh các mẫu Brand Spoofing, tên miền lạ (`.xyz`, `.top`), bẫy OTP.
-2. **Tier 2 (Slow-Path Cloud Forensic Council)**:
+1. **Cấp 1 (phân loại cục bộ)**:
+   - Bộ phân loại **ViSoBERT** đã tinh chỉnh chạy bằng ONNX Runtime trên CPU khi có tệp ONNX hợp lệ; nếu không, hệ thống thử dùng checkpoint PyTorch. Tệp ONNX hiện được xuất ở độ chính xác thông thường (FP32), chưa được lượng tử hóa INT8.
+   - Khi huấn luyện, mô hình dùng Cross Entropy có trọng số lớp, với trọng số lớp lừa đảo là **5.0**. Nhiệt độ hiệu chỉnh được học trên tập xác thực; giá trị lưu trong báo cáo huấn luyện hiện tại là **T = 1.4015**. Bộ phân loại áp dụng các ngưỡng 0.35 và 0.85 để đưa ra một trong ba kết quả: HAM, REVIEW hoặc SCAM.
+   - Không có bộ lọc từ khóa riêng để quyết định Brand Spoofing, tên miền đáng ngờ hay bẫy OTP. Một số heuristics tạo chỉ số radar phục vụ trình bày kết quả; chúng không thay đổi nhãn phân loại của ViSoBERT.
+2. **Cấp 2 (hội đồng phân tích chuyên sâu trên đám mây)**:
    - Kích hoạt khi độ tự tin Tier 1 $< \tau = 0.90$ (khoảng 15–20% lưu lượng khó, mơ hồ).
    - Hội đồng 5 Agent chuyên môn hóa:
      1. `Cyber Threat & Malicious URL Inspector` (Chuyên gia kỹ thuật IOC & link)
@@ -51,7 +51,7 @@
      3. `Vietnamese Linguistic & Teencode Analyst` (Chuyên gia teencode, lóng tiếng Việt)
      4. `Banking & Financial Protocol Verifier` (Chuyên gia quy chuẩn ngân hàng)
      5. `Public Defender / Anti-Alarm-Fatigue Advocate` (Chuyên gia phản biện chống báo động giả)
-   - Tối ưu hiệu năng: Cơ chế **Early-Exit** (dừng sớm khi đạt đa số áp đảo 4-1 hoặc 5-0), **Circuit Breaker** (tự ngắt và chuyển model dự phòng khi lỗi 429).
+   - Tối ưu hiệu năng: Cơ chế **Early-Exit** (dừng sớm khi đạt đa số áp đảo 4-1 hoặc 5-0), **Circuit Breaker** (tự ngắt và chuyển sang mô hình dự phòng khi gặp lỗi 429).
 
 ---
 
@@ -90,8 +90,8 @@ Scamshield-AI-Pipeline/
 │   └── model_registry.py     # Dynamic Cloud Model Registry
 │
 ├── scripts/                  # Scripts benchmark, training & ONNX export
-│   ├── train_visobert.py     # Fine-tune ViSoBERT với WBCE alpha=5.0
-│   ├── export_visobert_onnx.py # Export sang ONNX Runtime opset 17
+│   ├── train_visobert.py     # Tinh chỉnh ViSoBERT với trọng số lớp SCAM = 5.0
+│   ├── export_visobert_onnx.py # Xuất ONNX Runtime opset 17 (FP32)
 │   └── evaluate_council_benchmark.py
 │
 └── tests/                    # Kiểm thử tự động
@@ -100,24 +100,24 @@ Scamshield-AI-Pipeline/
 
 ---
 
-## 🚀 Hướng dẫn Cài đặt & Chạy
+## 🚀 Hướng dẫn cài đặt và chạy
 
-### 1. Chuẩn bị Môi trường
+### 1. Chuẩn bị môi trường
 
 ```bash
-# Clone repository
+# Sao chép kho mã nguồn
 git clone https://github.com/thalord2825/Scamshield-AI-Pipeline.git
 cd Scamshield-AI-Pipeline
 
-# Kích hoạt Git LFS để kéo file mô hình lớn (*.onnx)
+# Kích hoạt Git LFS để tải các tệp mô hình lớn (*.onnx)
 git lfs install
 git lfs pull
 ```
 
-### 2. Cài đặt Python Dependencies
+### 2. Cài đặt thư viện Python
 
 ```bash
-# Khuyến nghị sử dụng Python 3.10 - 3.12
+# Khuyến nghị dùng Python 3.10–3.12
 python -m venv .venv
 
 # Windows:
@@ -128,51 +128,70 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-### 3. Cấu hình Biến Môi trường
+### 3. Cấu hình biến môi trường
 
-Sao chép `.env.example` thành `.env`:
+Tạo tệp `.env` từ mẫu `.env.example`:
 ```bash
 cp .env.example .env
 ```
-Điền `GEMINI_API_KEY` (và các API key tùy chọn khác nếu dùng đa nhà cung cấp cho Tier 2).
+Điền `GEMINI_API_KEY` và các khóa API tùy chọn nếu sử dụng nhiều nhà cung cấp cho Cấp 2.
 
-### 4. Khởi chạy Microservice REST API
+### 4. Khởi chạy dịch vụ REST API
+
+Endpoint quét lưu kết quả hoàn tất vào PostgreSQL. Khi chạy cục bộ, hãy khởi động
+các dịch vụ bằng Compose để có sẵn cơ sở dữ liệu, hoặc đặt `DATABASE_URL` trỏ đến
+một máy chủ PostgreSQL có thể truy cập. Hai endpoint `POST /api/v1/scan` và
+`POST /api/v1/visobert/predict` nhận tùy chọn `core_check_id` là số nguyên dương.
+Truyền `id` tương ứng trong bảng `check_requests` của Core để các lần thử lại cập
+nhật cùng một tác vụ. Nếu không truyền, dịch vụ tự tạo mã tham chiếu nội bộ và
+ghi mỗi yêu cầu thành một tác vụ riêng. Hãy truyền mã Core khi cần loại bỏ các
+tác vụ trùng lặp do thử lại.
 
 ```bash
 uvicorn api.app:app --host 0.0.0.0 --port 8000 --reload
 ```
-API Documentation tự động có sẵn tại:
+Tài liệu API được tạo tự động tại:
 - Swagger UI: `http://localhost:8000/docs`
 - Redoc: `http://localhost:8000/redoc`
 
-### 5. Chạy bằng Docker / Docker Compose
+### 5. Chạy bằng Docker hoặc Docker Compose
 
 ```bash
-# Chạy với Docker Compose
+# Khởi động các dịch vụ bằng Docker Compose
 docker compose up -d --build
 
-# Kiểm tra log
+# Theo dõi nhật ký hoạt động
 docker compose logs -f
 ```
 
+Compose khởi động PostgreSQL có bật pgvector trước dịch vụ AI. Trong lần khởi tạo
+cơ sở dữ liệu đầu tiên, Postgres chạy `db/init/001_ai_service.sql`, tệp DDL tương
+ứng với `ScamShield_App/docs/database/ai-service.dbml`. Lược đồ tạo các bảng tác
+vụ AI, mô hình, suy luận và RAG. Các tập lệnh khởi tạo chỉ chạy khi volume dữ liệu
+Postgres còn trống. Nếu volume đã có cơ sở dữ liệu, hãy áp dụng SQL một lần bằng
+lệnh `psql -f db/init/001_ai_service.sql`.
+
+Trước khi triển khai ngoài môi trường phát triển cục bộ, hãy đặt `POSTGRES_PASSWORD` trong tệp `.env`.
+
 ---
 
-## 📡 API Endpoints
+## 📡 Các endpoint API
 
-### 1. Kiểm tra sức khỏe hệ thống: `GET /health`
+### 1. Kiểm tra trạng thái hệ thống: `GET /health`
 ```json
 {
   "status": "healthy",
   "version": "1.1.0",
   "service": "ScamShield AI Pipeline Engine",
   "tier1_ready": true,
-  "tier2_ready": true
+  "tier2_ready": true,
+  "database_ready": true
 }
 ```
 
 ### 2. Quét tin nhắn lừa đảo: `POST /api/v1/scan`
 
-**Request:**
+**Yêu cầu:**
 ```json
 {
   "content": "Vietcombank: Tai khoan cua ban tam khoa do bat thuong. Dang nhap https://vcb-xacthuc.xyz de mo khoa.",
@@ -180,7 +199,7 @@ docker compose logs -f
 }
 ```
 
-**Response (Chuẩn hóa cho Spring Boot & Frontend):**
+**Phản hồi (định dạng chuẩn hóa cho Spring Boot và giao diện người dùng):**
 ```json
 {
   "status": "success",
@@ -237,60 +256,61 @@ docker compose logs -f
 
 ---
 
-## 🧪 Chạy Demo & Kiểm thử
+## 🧪 Huấn luyện, chạy demo và kiểm thử
 
-### Fine-tune ViSoBERT Tier 1
+### Tinh chỉnh ViSoBERT cho Cấp 1
 
-The training input is `data/raw/vietnamese_sms_merged_all.csv` (`message,label`;
-optional `message_id,source`). The held-out file is
-`data/raw/vietnamese_sms_test.csv` (`message,label`). Labels are `0=HAM` and
-`1=SCAM`. The supplied test set shares messages with the training CSV;
-`scripts/train_visobert.py` removes all test messages from the training pool
-before creating a stratified validation split. It stops on conflicting labels.
+Tệp dữ liệu huấn luyện là `data/raw/vietnamese_sms_merged_all.csv` (gồm các cột
+`message,label`; có thể có thêm `message_id,source`). Tệp kiểm thử độc lập là
+`data/raw/vietnamese_sms_test.csv` (gồm `message,label`). Nhãn `0=HAM` biểu thị
+tin nhắn bình thường, `1=SCAM` biểu thị tin nhắn lừa đảo. Tập kiểm thử được cung
+cấp có một số nội dung trùng với tệp huấn luyện; trước khi tạo tập xác thực phân
+tầng, `scripts/train_visobert.py` loại các tin nhắn kiểm thử khỏi dữ liệu huấn
+luyện. Quá trình sẽ dừng nếu phát hiện nhãn mâu thuẫn.
 
 ```powershell
 .venv/Scripts/python.exe -m pip install -r requirements-training.txt
 .venv/Scripts/python.exe scripts/train_visobert.py
 ```
 
-The script downloads the official `uitnlp/visobert` checkpoint on first run,
-using its pinned `model.safetensors` revision. On Windows with a compatible
-NVIDIA driver, install a CUDA PyTorch wheel from the official PyTorch index
-before running training; the default pip wheel may be CPU only.
-The supplied test file has 597 rows but 566 unique messages, so the reported
-test sample count is 566.
-The script
-fine-tunes a two-class head with scam class weight 5, selects the checkpoint
-with best validation macro-F1, calibrates temperature on validation logits,
-and evaluates once on the held-out test data. Model and tokenizer files plus
-`training_report.json` are saved in `models/visobert_finetuned/`. Use
-`--epochs`, `--batch-size`, `--max-length`, and `--output-dir` to adjust the run.
-The `.safetensors` checkpoint follows this repository's Git LFS rule.
+Trong lần chạy đầu tiên, tập lệnh tải checkpoint chính thức `uitnlp/visobert` theo
+phiên bản `model.safetensors` đã ghim. Trên Windows có trình điều khiển NVIDIA
+tương thích, hãy cài bản PyTorch hỗ trợ CUDA từ kho chính thức của PyTorch trước
+khi huấn luyện; gói pip mặc định có thể chỉ hỗ trợ CPU. Tệp kiểm thử có 597 dòng
+nhưng chỉ gồm 566 tin nhắn khác nhau, vì vậy số mẫu kiểm thử được báo cáo là 566.
 
-### Export the trained classifier to ONNX
+Tập lệnh tinh chỉnh đầu phân loại hai lớp với trọng số lớp lừa đảo bằng 5, chọn
+checkpoint có macro-F1 trên tập xác thực cao nhất, hiệu chỉnh nhiệt độ từ logits
+xác thực rồi đánh giá một lần trên tập kiểm thử độc lập. Các tệp mô hình,
+tokenizer và `training_report.json` được lưu trong `models/visobert_finetuned/`.
+Dùng các tùy chọn `--epochs`, `--batch-size`, `--max-length` và `--output-dir` để
+điều chỉnh lần chạy. Checkpoint `.safetensors` được quản lý bằng Git LFS theo cấu
+hình của kho mã nguồn.
+
+### Xuất bộ phân loại đã huấn luyện sang ONNX
 
 ```powershell
 .venv/Scripts/python.exe -m pip install -r requirements-export.txt
 .venv/Scripts/python.exe scripts/export_visobert_onnx.py
 ```
 
-This writes `models/visobert_finetuned/visobert_classifier.onnx` and
-`onnx_export_report.json`. The exporter checks the ONNX graph and compares
-ONNX Runtime CPU logits with PyTorch on sample messages. Calibration and
-decision thresholds remain in `training_report.json`. The scan API currently
-uses the PyTorch checkpoint; exporting does not change its runtime.
+Lệnh này tạo `models/visobert_finetuned/visobert_classifier.onnx` và
+`onnx_export_report.json`. Công cụ xuất kiểm tra đồ thị ONNX và so sánh logits
+trên CPU của ONNX Runtime với PyTorch bằng một số tin nhắn mẫu. Thông tin hiệu
+chỉnh và ngưỡng quyết định vẫn nằm trong `training_report.json`. API quét hiện
+dùng checkpoint PyTorch; việc xuất sang ONNX chưa làm thay đổi bộ máy chạy.
 
-- **Chạy console demo kiểm tra 10 benchmark test cases:**
+- **Chạy bản demo dòng lệnh với 10 trường hợp kiểm thử chuẩn:**
   ```bash
   python demo_scamshield_mvp.py
   ```
-- **Chạy demo chế độ tương tác nhập tin nhắn trực tiếp:**
+- **Chạy demo tương tác để nhập tin nhắn trực tiếp:**
   ```bash
   python demo_scamshield_mvp.py --interactive
   ```
 
 ---
 
-## 🛡️ License & Team
+## 🛡️ Giấy phép và đội ngũ
 Phát triển bởi đội ngũ ScamShield-VN Core AI Engineering Team.
-Mọi đóng góp tuân thủ quy chuẩn mã nguồn mở và bảo mật dữ liệu an toàn thông tin.
+Mọi đóng góp cần tuân thủ quy chuẩn mã nguồn mở và bảo đảm an toàn thông tin, bảo mật dữ liệu.
