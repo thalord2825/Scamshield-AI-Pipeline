@@ -1,14 +1,14 @@
 """
 ==============================================================================
-ScamShield-VN: 2-Tier Cascaded AI Router (PhoBERT Fast-Path + Dynamic Cloud LLM)
+ScamShield-VN: 2-Tier Cascaded AI Router (ViSoBERT Fast-Path + 3-Agent Council)
 ==============================================================================
 Author: ScamShield Core Engineering Team
 Description:
     Core Cascaded Orchestrator implementing the Accuracy-Latency-Cost Trilemma solution:
-    - Tier 1 (Fast-Path Local CPU): PhoBERT ONNX (latency < 65ms, cost $0)
-    - Threshold Routing (tau = 0.90): High confidence routes directly.
-    - Tier 2 (Slow-Path Cloud Fallback): Dynamic Model Registry calls Gemini Lite/Standard
-      only for ambiguous/low-confidence instances (~15-20% traffic).
+    - Tier 1 (Fast-Path Local CPU): ViSoBERT ONNX/PyTorch (latency < 45ms, cost $0)
+    - Threshold Routing (tau = 0.90 / REVIEW band): High confidence routes directly.
+    - Tier 2 (Consolidated 3-Agent Forensic Council): Maker-Checker specialists
+      called only for ambiguous instances in the REVIEW band [0.35, 0.85].
 ==============================================================================
 """
 
@@ -91,13 +91,14 @@ class TwoTierRouter:
             council_config_path: Path to YAML config for Forensic Council.
             tier1_temperature: Temperature Scaling parameter for Tier 1.
             tier1_cost_alpha: WBCE penalty alpha for Tier 1.
-            use_council: Whether to escalate to 5-Agent Forensic Council (default True).
+            use_council: Whether to escalate to 3-Agent Forensic Council (default True).
         """
         self.tau = confidence_threshold
         self.use_council = use_council
         self.tier1_classifier = TrainedViSoBERTClassifier()
         def usable_key(value: Optional[str]) -> bool:
             return bool(value and not value.lower().startswith("your_"))
+
         self.tier2_registry = ModelRegistry(
             api_key=api_key,
             config_path=config_path,
@@ -109,8 +110,9 @@ class TwoTierRouter:
             or usable_key(os.getenv("GROQ_API_KEY"))
             or usable_key(os.getenv("OPENAI_API_KEY"))
             or usable_key(os.getenv("ANTHROPIC_API_KEY"))
+            or (self.council is not None)
         )
-        mode_str = "5-Agent Forensic Council" if use_council else "Single Cloud LLM"
+        mode_str = "3-Agent Forensic Council" if use_council else "Single Cloud LLM"
         logger.info(f"TwoTierRouter Initialized. Fallback Threshold (tau) = {self.tau:.2f} | Tier-2 Mode: {mode_str}")
 
     def classify(self, message: str, force_tier2: bool = False) -> Dict[str, Any]:
@@ -128,7 +130,7 @@ class TwoTierRouter:
         start_overall = time.perf_counter()
 
         # -------------------------------------------------------------
-        # Step 1: Execute Tier 1 Local Fast-Path (PhoBERT CPU)
+        # Step 1: Execute Tier 1 Local Fast-Path (ViSoBERT CPU)
         # -------------------------------------------------------------
         t1_result = self.tier1_classifier.predict(message)
         t1_confidence = t1_result["confidence"]
@@ -184,8 +186,8 @@ class TwoTierRouter:
             }
 
         # -------------------------------------------------------------
-        # Case B: Escalate to Tier 2 (Dynamic Cloud Fallback)
-        # Reason: Ambiguous case (Confidence < tau) or forced audit
+        # Case B: Escalate to Tier 2 (Dynamic Cloud Fallback / Council)
+        # Reason: Ambiguous case (REVIEW band) or forced audit
         # -------------------------------------------------------------
         fallback_trigger = "FORCED_AUDIT" if force_tier2 else "VISOBERT_REVIEW_BAND"
 
@@ -209,10 +211,10 @@ class TwoTierRouter:
                 "escalated": False,
             }
 
-        # Check if Forensic Council is enabled
+        # Check if 3-Agent Forensic Council is enabled
         if self.use_council and self.council:
             routing_reason = f"ViSoBERT P(SCAM)={scam_prob:.4f} is in REVIEW band; escalating to Tier 2 council."
-            logger.info(f"Escalating message to Tier 2 Forensic Council. Reason: {fallback_trigger}")
+            logger.info(f"Escalating message to Tier 2 3-Agent Forensic Council. Reason: {fallback_trigger}")
             try:
                 council_res = self.council.evaluate_sync(message)
                 total_elapsed_ms = (time.perf_counter() - start_overall) * 1000 + t1_result["latency_ms"]
@@ -220,25 +222,27 @@ class TwoTierRouter:
                     "message": message,
                     "final_label": council_res["final_label"],
                     "final_confidence": council_res["consensus_scam_prob"],
-                    "is_scam": (council_res["final_label"] == "SCAM"),
-                    "scam_type": "Hội đồng Pháp y Đa Tác tử (5 Chuyên gia)",
+                    "is_scam": (council_res["final_label"] in ["SCAM-RISK", "SCAM"]),
+                    "scam_type": "Hội đồng Pháp y Đa Tác tử (3 Chuyên gia)",
                     "risk_level": council_res["risk_level"],
                     "explanation": council_res["unified_rationale"],
                     "routing_path": "TIER_2_FORENSIC_COUNCIL",
                     "routing_reason": routing_reason,
-                    "tier_used": "Tier 2 (5-Agent Forensic Council)",
-                    "model_name": f"ForensicCouncil-v1.1 ({'EarlyExit' if council_res['early_exit_triggered'] else 'FullPanel'})",
+                    "tier_used": "Tier 2 (3-Agent Forensic Council)",
+                    "model_name": f"ForensicCouncil-v2.0 ({'EarlyExit' if council_res.get('early_exit_triggered') else 'FullPanel'})",
                     "tier1_telemetry": tier1_summary,
                     "tier2_telemetry": {
                         "status": "EXECUTED",
-                        "architecture": "5-Agent Multi-LLM Heterogeneous Council",
+                        "architecture": "3-Agent Multi-LLM Heterogeneous Council",
                         "consensus_score": council_res["consensus_scam_prob"],
-                        "early_exit": council_res["early_exit_triggered"],
-                        "defender_intervened": council_res["defender_intervened"],
+                        "early_exit": council_res.get("early_exit_triggered", False),
+                        "defender_intervened": council_res.get("defender_intervened", False),
                         "latency_ms": council_res["total_latency_ms"],
                         "cost_usd": council_res["estimated_council_cost_usd"],
                         "fallback_trigger": fallback_trigger,
                         "specialist_votes": council_res["specialist_votes"],
+                        "total_api_calls": council_res.get("total_api_calls", 3),
+                        "pii_redacted": council_res.get("pii_redacted", False),
                     },
                     "total_latency_ms": round(total_elapsed_ms + council_res["total_latency_ms"], 2),
                     "total_cost_usd": council_res["estimated_council_cost_usd"],
@@ -261,7 +265,6 @@ class TwoTierRouter:
         if t2_response.get("success"):
             try:
                 raw_text = t2_response["text"].strip()
-                # Clean possible markdown wrapping
                 if raw_text.startswith("```json"):
                     raw_text = raw_text.replace("```json", "", 1).rstrip("` \n")
                 elif raw_text.startswith("```"):
@@ -269,15 +272,13 @@ class TwoTierRouter:
 
                 parsed = json.loads(raw_text)
                 is_scam = parsed.get("is_scam", False)
-                final_label = "SCAM" if is_scam else "HAM"
+                final_label = "SCAM-RISK" if is_scam else "LOW-RISK"
                 final_conf = float(parsed.get("confidence", 0.95))
                 scam_type = parsed.get("scam_type", "Phân tích ngữ cảnh sâu")
                 risk_level = parsed.get("risk_level", "HIGH" if is_scam else "LOW")
                 explanation = parsed.get("explanation", "Phân tích ngữ cảnh sâu bởi Cloud LLM.")
 
                 total_elapsed_ms = (time.perf_counter() - start_overall) * 1000 + t1_result["latency_ms"]
-
-                # Estimated cost for Lite model (~$0.075 / 1M input tokens, ~$0.30 / 1M output tokens -> ~$0.00005 per request)
                 estimated_cost = 0.00005
 
                 return {
@@ -311,7 +312,7 @@ class TwoTierRouter:
             except Exception as e:
                 logger.error(f"Failed to parse Tier 2 LLM JSON output: {e}. Falling back to Tier 1 prediction.")
 
-        # If Tier 2 failed or API key not present, graceful fallback to Tier 1 decision
+        # Graceful fallback to Tier 1 decision
         total_elapsed_ms = (time.perf_counter() - start_overall) * 1000 + t1_result["latency_ms"]
         err_msg = t2_response.get("error", "OFFLINE")
         return {
@@ -336,6 +337,8 @@ class TwoTierRouter:
             "total_cost_usd": 0.0,
             "escalated": True,
         }
+
+    route = classify
 
     def classify_batch(self, messages: List[str]) -> List[Dict[str, Any]]:
         """Classify a batch of messages and record metrics."""

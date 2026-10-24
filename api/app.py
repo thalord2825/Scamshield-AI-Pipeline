@@ -53,8 +53,8 @@ logger = logging.getLogger("ScamShield.API")
 # FastAPI App setup
 app = FastAPI(
     title="ScamShield-VN AI Pipeline Engine",
-    description="2-Tier Cascaded AI Inference Service (Tier-1 ViSoBERT Fast-Path + Tier-2 5-Agent Forensic Council)",
-    version="1.1.0",
+    description="2-Tier Cascaded AI Inference Service (Tier-1 ViSoBERT Fast-Path + Tier-2 3-Agent Forensic Council)",
+    version="2.0.0",
 )
 # Direct model-inspection endpoint and /api/v1/scan share the same cached
 # fine-tuned ViSoBERT checkpoint (models/visobert_finetuned/).
@@ -69,9 +69,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# The router loads and validates the saved ViSoBERT weights, tokenizer, and
-# training_report.json at startup. A missing checkpoint leaves the API unready;
-# it does not silently switch to the old regex-based classifier.
 router_instance: TwoTierRouter = None
 
 
@@ -100,7 +97,7 @@ def health_check():
     database_ready = check_database()
     return HealthResponse(
         status="healthy" if (tier1_ready and tier2_ready and database_ready) else "degraded",
-        version="1.1.0",
+        version="2.0.0",
         service="ScamShield AI Pipeline Engine",
         tier1_ready=tier1_ready,
         tier2_ready=tier2_ready,
@@ -108,19 +105,28 @@ def health_check():
     )
 
 
-def _compute_radar_metrics(content: str, is_scam: bool, raw_res: Dict[str, Any]) -> RadarMetrics:
-    """Derives intuitive 0-100 radar scores based on extracted cues and council results."""
-    text_lower = content.lower()
-    
-    # Heuristic scoring
-    urgency = 85 if any(w in text_lower for w in ["ngay", "khẩn cấp", "24h", "hết hạn", "khóa", "tạm khóa", "gấp"]) else 15
-    authority = 95 if any(w in text_lower for w in ["công an", "viện kiểm sát", "tòa án", "bộ công an", "vietcombank", "thuế"]) else 10
-    financial = 90 if any(w in text_lower for w in ["tiền", "chuyển khoản", "nạp", "otp", "vay", "tri ân", "trúng thưởng", "lương"]) else 15
-    channel = 85 if any(w in text_lower for w in ["zalo", "telegram", "link", "http", ".xyz", ".top", ".cc"]) else 20
-    data_harvest = 90 if any(w in text_lower for w in ["cccd", "mật khẩu", "đăng nhập", "otp", "sinh trắc", "cập nhật"]) else 10
+def _compute_radar_metrics(message: str, is_scam: bool, raw_res: Dict[str, Any]) -> RadarMetrics:
+    """Computes explainable radar dimensions for frontend radar chart."""
+    msg_lower = message.lower()
+
+    urgency = 15
+    authority = 15
+    financial = 15
+    channel = 15
+    data_harvest = 10
+
+    if any(k in msg_lower for k in ["khẩn", "ngay", "24h", "khoá", "bị khóa", "hết hạn", "trước khi"]):
+        urgency += 55
+    if any(k in msg_lower for k in ["công an", "viện kiểm sát", "bộ công an", "vietcombank", "mb bank", "thuế"]):
+        authority += 60
+    if any(k in msg_lower for k in ["trúng thưởng", "tri ân", "tặng quà", "hoa hồng", "việc làm", "vnd", "tiền"]):
+        financial += 55
+    if any(k in msg_lower for k in ["zalo", "telegram", "inbox", "link", "nhấp vào", "http", ".xyz", ".top"]):
+        channel += 55
+    if any(k in msg_lower for k in ["otp", "mật khẩu", "cccd", "số tài khoản", "sinh trắc", "đăng nhập", "xác minh"]):
+        data_harvest += 60
 
     if not is_scam:
-        # Scale down for HAM messages
         urgency = min(urgency, 30)
         authority = min(authority, 30)
         financial = min(financial, 25)
@@ -144,7 +150,7 @@ def _build_recommendations(is_scam: bool, risk_level: str) -> List[str]:
             "Không cung cấp mật khẩu ngân hàng, mã OTP, số CCCD hoặc thông tin sinh trắc học.",
             "Thông báo cho người thân, chặn số liên lạc và gửi báo cáo lừa đảo lên hệ thống.",
         ]
-    elif risk_level in ["SUSPICIOUS", "MEDIUM"]:
+    elif risk_level in ["SUSPICIOUS", "MEDIUM", "UNKNOWN"]:
         return [
             "Tin nhắn có dấu hiệu bất thường, cần kiểm tra lại qua kênh liên hệ chính thống.",
             "Xác minh danh tính người gửi qua số điện thoại tổng đài chính thức của đơn vị liên quan.",
@@ -160,18 +166,21 @@ def scan_message(req: ScanRequest):
     """
     Main Scan Endpoint conforming to ScamShield Contract (docs/04_API_CONTRACTS_AND_SCHEMAS.md).
     Tier 1 runs the trained ViSoBERT model using its saved calibration and
-    decision thresholds. REVIEW-band messages can escalate to Tier 2.
+    decision thresholds. REVIEW-band messages escalate to Tier 2 3-Agent Council.
     """
+    global router_instance
+    if not router_instance:
+        startup_event()
     if not router_instance:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="AI Pipeline Engine is still initializing. Please retry shortly.",
         )
 
+    content_to_scan = req.content or req.message or ""
+
     try:
-        # classify() invokes trained ViSoBERT inference for req.content.
-        # The other request fields are not model inputs at this stage.
-        raw_res = router_instance.classify(req.content, force_tier2=req.force_tier2)
+        raw_res = router_instance.classify(content_to_scan, force_tier2=req.force_tier2)
     except Exception as e:
         logger.error(f"Inference error during scan: {e}", exc_info=True)
         return StandardScanResponse(
@@ -182,15 +191,13 @@ def scan_message(req: ScanRequest):
     is_scam = raw_res.get("is_scam", False)
     confidence = float(raw_res.get("final_confidence", 0.0))
     tier_executed = 2 if raw_res.get("escalated", False) else 1
-
-    # Translate the model/router verdict into the public API's risk vocabulary.
-    # The radar and recommendation helpers below are presentation heuristics;
-    # they do not determine the ViSoBERT classification.
+    final_label = raw_res.get("final_label", "")
     raw_risk = raw_res.get("risk_level", "LOW").upper()
-    if raw_res.get("final_label") in {"REVIEW", "SUSPICIOUS_REVIEW"}:
+
+    if final_label in {"REVIEW", "SUSPICIOUS_REVIEW", "UNKNOWN"}:
         risk_level = "SUSPICIOUS"
         risk_score = round(float(raw_res.get("tier1_telemetry", {}).get("scam_prob", 0.5)) * 100.0, 1)
-    elif is_scam:
+    elif is_scam or final_label == "SCAM-RISK":
         risk_level = "DANGEROUS" if raw_risk in ["CRITICAL", "HIGH", "DANGEROUS"] else "SUSPICIOUS"
         risk_score = round(confidence * 100.0, 1)
         if risk_score < 70.0 and risk_level == "DANGEROUS":
@@ -203,23 +210,26 @@ def scan_message(req: ScanRequest):
     council_breakdown = None
     if tier_executed == 2 and "tier2_telemetry" in raw_res:
         t2_telemetry = raw_res["tier2_telemetry"]
-        specialist_votes = t2_telemetry.get("specialist_votes", [])
+        specialist_votes = t2_telemetry.get("specialist_votes", {})
+        votes_list = list(specialist_votes.values()) if isinstance(specialist_votes, dict) else specialist_votes
         agents_list = []
-        for v in specialist_votes:
+        for v in votes_list:
+            v_vote = str(v.get("vote", "")).upper()
+            verdict = "DANGEROUS" if "SCAM" in v_vote else "SAFE"
             agents_list.append(
                 AgentFinding(
                     role=v.get("display_name", v.get("role_id", "Specialist")),
-                    verdict="DANGEROUS" if v.get("vote") == "SCAM" else "SAFE",
-                    score=round(v.get("scam_probability", 0.0) * 100.0, 1),
-                    finding=v.get("rationale", "Phân tích chuyên sâu từ Hội đồng"),
+                    verdict=verdict,
+                    score=round(float(v.get("scam_prob", v.get("scam_probability", 0.0))) * 100.0, 1),
+                    finding=v.get("analysis", v.get("rationale", "Phân tích chuyên sâu từ Hội đồng")),
                 )
             )
 
-        scam_count = sum(1 for v in specialist_votes if v.get("vote") == "SCAM")
-        total_votes = len(specialist_votes) if specialist_votes else 5
+        scam_count = sum(1 for v in votes_list if "SCAM" in str(v.get("vote", "")).upper())
+        total_votes = len(votes_list) if votes_list else 3
         council_breakdown = CouncilBreakdown(
             consensus_ratio=f"{scam_count}/{total_votes}",
-            lead_model=raw_res.get("model_name", "ForensicCouncil-v1.1"),
+            lead_model=raw_res.get("model_name", "ForensicCouncil-v2.0"),
             early_exit=t2_telemetry.get("early_exit", False),
             defender_intervened=t2_telemetry.get("defender_intervened", False),
             agents=agents_list,
@@ -236,7 +246,7 @@ def scan_message(req: ScanRequest):
         summary=raw_res.get("explanation", "Kết quả phân tích từ AI Engine"),
     )
 
-    radar = _compute_radar_metrics(req.content, is_scam, raw_res)
+    radar = _compute_radar_metrics(content_to_scan, is_scam, raw_res)
     recommendations = _build_recommendations(is_scam, risk_level)
 
     result_data = ScanResultData(
@@ -253,11 +263,13 @@ def scan_message(req: ScanRequest):
             "total_latency_ms": raw_res.get("total_latency_ms"),
             "total_cost_usd": raw_res.get("total_cost_usd"),
             "tier1": raw_res.get("tier1_telemetry"),
+            "tier2": raw_res.get("tier2_telemetry"),
             "final_label": raw_res.get("final_label"),
         },
     )
 
     try:
+        verdict_str = "UNKNOWN" if raw_res.get("final_label") in {"REVIEW", "SUSPICIOUS_REVIEW", "UNKNOWN"} else "SCAM_RISK" if is_scam else "LOW_RISK"
         save_scan(
             content=req.content,
             input_type=(
@@ -267,7 +279,7 @@ def scan_message(req: ScanRequest):
             ),
             core_check_id=req.core_check_id,
             raw_result=raw_res,
-            verdict="UNKNOWN" if raw_res.get("final_label") in {"REVIEW", "SUSPICIOUS_REVIEW"} else "SCAM_RISK" if is_scam else "LOW_RISK",
+            verdict=verdict_str,
             confidence=confidence,
             explanation=raw_res.get("explanation", "Kết quả phân tích từ AI Engine"),
             guidance="\n".join(recommendations),
@@ -279,7 +291,11 @@ def scan_message(req: ScanRequest):
             detail="Inference completed but the result could not be saved to the database.",
         ) from e
 
-    return StandardScanResponse(status="success", data=result_data)
+    return StandardScanResponse(
+        status="success",
+        data=result_data,
+        error=None,
+    )
 
 
 @app.post("/api/v1/scan/raw")

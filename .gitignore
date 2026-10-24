@@ -45,3 +45,8 @@ htmlcov/
 
 # Temporary downloaded datasets
 data/raw/vietnamese_sms_full.csv
+
+# Local databases
+*.db
+*.sqlite
+*.sqlite3
